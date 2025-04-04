@@ -1,6 +1,1 @@
-- insaleny simple5 -> -60,571
-- donchina5(reverse) -> -39718
-- donchian4 -> -39629
-- donchian3 -> -41588 really smoothly
-- newdoanchina -> -41332 really smoothly
-- insanely simple 5 with the sell for mid_rpcie < sma -> -124,399
+Repo for IMC prosperity 2025
