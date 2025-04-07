@@ -1,7 +1,7 @@
-from datamodel import OrderDepth, TradingState, Order
-from typing import List, Dict
-import jsonpickle
-import numpy as np
+from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from typing import Any, List
+import json
+import math
 
 class Logger:
     def __init__(self) -> None:
@@ -120,65 +120,89 @@ class Logger:
 logger = Logger()
 
 class Trader:
-    def __init__(self):
-        self.window_size = 5  # Number of past prices to consider for SMA
-        self.price_history = {}  # Dictionary to store price history for each product
-
     def run(self, state: TradingState):
-        #print("traderData: " + state.traderData)
-        #print("Observations: " + str(state.observations))
+        try:
+            stored_data = json.loads(state.traderData) if state.traderData else {}
+        except:
+            stored_data = {}
 
-        # Deserialize traderData to maintain state across runs
-        if state.traderData:
-            self.price_history = jsonpickle.decode(state.traderData)
-        else:
-            self.price_history = {}
+        if "RAINFOREST_RESIN" not in stored_data:
+            stored_data["RAINFOREST_RESIN"] = []
+        if "KELP" not in stored_data:
+            stored_data["KELP"] = []
+
+        SMA_WINDOW = 21 # previsoulsy 5 for standalone results
+        FAST_WINDOW = 7
+        TRADE_SIZE = 25
+        POSITION_LIMIT = 50
+
+        def compute_mid_price(order_depth: OrderDepth) -> float:
+            if len(order_depth.buy_orders) == 0 or len(order_depth.sell_orders) == 0:
+                return None
+            best_bid = max(order_depth.buy_orders.keys())
+            best_ask = min(order_depth.sell_orders.keys())
+            return (best_bid + best_ask) / 2.0
 
         result = {}
-        for product, order_depth in state.order_depths.items():
+
+        for product in ["RAINFOREST_RESIN", "KELP"]:
+            if product not in state.order_depths:
+                continue
+            order_depth: OrderDepth = state.order_depths[product]
+            current_position = state.position.get(product, 0)
+
+            mid_price = compute_mid_price(order_depth)
+            if mid_price is None:
+                result[product] = []
+                continue
+
+            best_bid = max(order_depth.buy_orders.keys())
+            best_ask = min(order_depth.sell_orders.keys())
+
+            stored_data[product].append(mid_price)
+            stored_data[product] = stored_data[product][-SMA_WINDOW:]
+
+            sma = sum(stored_data[product]) / len(stored_data[product])
+
+            fast_ma = sum(stored_data[product][-FAST_WINDOW:]) / FAST_WINDOW
+
             orders: List[Order] = []
 
-            # Update price history with the mid-price of the current order book
-            if len(order_depth.buy_orders) > 0 and len(order_depth.sell_orders) > 0:
-                best_bid = max(order_depth.buy_orders.keys())
-                best_ask = min(order_depth.sell_orders.keys())
-                mid_price = (best_bid + best_ask) / 2.0
-                if product not in self.price_history:
-                    self.price_history[product] = []
-                self.price_history[product].append(mid_price)
+            limit = POSITION_LIMIT
+            size = TRADE_SIZE
 
-                # Maintain only the latest 'window_size' prices
-                if len(self.price_history[product]) > self.window_size:
-                    self.price_history[product].pop(0)
+            while best_ask < sma and fast_ma > sma: # issue a buy order
+                if current_position + size <= limit:
+                    orders.append(Order(product, best_ask, size))
+                    limit -= size
+                    best_ask += 1
+                    try:
+                        size = order_depth.sell_orders[best_ask]
+                    except:
+                        size = 0
+                else:
+                    orders.append(Order(product, best_ask, POSITION_LIMIT - current_position))
+                    break
 
-            # Calculate SMA if we have enough data points
-            if len(self.price_history[product]) == self.window_size:
-                sma = np.mean(self.price_history[product])
-                #print(f"SMA for {product}: {sma}")
+            limit = POSITION_LIMIT
+            size = TRADE_SIZE
 
-                # Trading logic based on SMA
-                # If the current mid price is below the SMA, it may indicate an upward trend
-                if mid_price < sma:
-                    # Place a buy order at the best ask price
-                    best_ask_price = min(order_depth.sell_orders.keys())
-                    best_ask_volume = order_depth.sell_orders[best_ask_price]
-                    orders.append(Order(product, best_ask_price, best_ask_volume))
-                    #print(f"Placing BUY order for {product}: {best_ask_volume} units at {best_ask_price}")
-
-                # If the current mid price is above the SMA, it may indicate a downward trend
-                elif mid_price > sma: # flipped
-                    # Place a sell order at the best bid price
-                    best_bid_price = max(order_depth.buy_orders.keys())
-                    best_bid_volume = order_depth.buy_orders[best_bid_price]
-                    orders.append(Order(product, best_bid_price, -best_bid_volume)) # maybe remove - here
-                    #print(f"Placing SELL order for {product}: {best_bid_volume} units at {best_bid_price}")
+            while best_bid > sma and sma > fast_ma: # issue a sell order
+                if current_position - size >= -limit:
+                    orders.append(Order(product, best_bid, -size))
+                    limit += size
+                    best_bid -= 1
+                    try:
+                        size = order_depth.buy_orders[best_bid]
+                    except:
+                        size = 0
+                else:
+                    orders.append(Order(product, best_bid, -POSITION_LIMIT + current_position))
+                    break
 
             result[product] = orders
 
-        # Serialize price history to maintain state in the next run
-        traderData = jsonpickle.encode(self.price_history)
-
-        conversions = 0  # No conversion requests in this strategy
+        new_trader_data = json.dumps(stored_data)
+        conversions = 0
         logger.flush(state, result, conversions, new_trader_data)
-        #logger.flush(state, result, conversions, traderData)
-        return result, conversions, traderData
+        return result, conversions, new_trader_data
