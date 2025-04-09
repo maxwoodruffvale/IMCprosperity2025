@@ -1,9 +1,10 @@
 # WHEN SUBMITTING FINAL SUBMISSION, CHANGE json AND ASSOCIATED FUNCTIONS TO jsonpickle AND REMOVE LOGGER
 
 from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
-from typing import Any, List
+from typing import Any, List, Dict
 import json
 import math
+import numpy as np
 
 class Logger:
     def __init__(self) -> None:
@@ -177,11 +178,11 @@ class Trader:
         order_depth = state.order_depths["RAINFOREST_RESIN"]
         position = state.position["RAINFOREST_RESIN"] if "RAINFOREST_RESIN" in state.position else 0
 
-        fair_value = 10000
-        take_width = 1
-
         buy_order_volume = 0
         sell_order_volume = 0
+
+        fair_value = 10000
+        take_width = 1
 
         if len(order_depth.sell_orders) != 0:
             # market taking
@@ -193,9 +194,9 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("RAINFOREST_RESIN", best_ask, quantity))
                     buy_order_volume += quantity
-                    order_depth.sell_orders[best_ask] += quantity
-                    if order_depth.sell_orders[best_ask] == 0:
-                        del order_depth.sell_orders[best_ask]
+                    # order_depth.sell_orders[best_ask] += quantity
+                    # if order_depth.sell_orders[best_ask] == 0:
+                    #     del order_depth.sell_orders[best_ask]
 
         if len(order_depth.buy_orders) != 0:
             best_bid = max(order_depth.buy_orders.keys())
@@ -206,9 +207,9 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("RAINFOREST_RESIN", best_bid, -1 * quantity))
                     sell_order_volume += quantity
-                    order_depth.buy_orders[best_bid] -= quantity
-                    if order_depth.buy_orders[best_bid] == 0:
-                        del order_depth.buy_orders[best_bid]
+                    # order_depth.buy_orders[best_bid] -= quantity
+                    # if order_depth.buy_orders[best_bid] == 0:
+                    #     del order_depth.buy_orders[best_bid]
 
         # make 0 ev trades to try to get back to 0 position
         orders, buy_order_volume, sell_order_volume = self.clear_orders(
@@ -224,10 +225,10 @@ class Trader:
 
         # market making
         # if prices are at most this much above/below the fair, do not market make
-        disregard_edge = 0
+        disregard_edge = 1
 
         # if prices are at most this much above/below the fair, join (market make at the same price)
-        join_edge = 1
+        join_edge = 2
         asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > fair_value + disregard_edge]
         bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < fair_value - disregard_edge]
 
@@ -268,15 +269,15 @@ class Trader:
         order_depth = state.order_depths["KELP"]
         position = state.position["KELP"] if "KELP" in state.position else 0
 
+        buy_order_volume = 0
+        sell_order_volume = 0
+
         # fair value calculation: it seems that the fair is the mid-price of the highest ask and lowest bid
         mm_ask = max(order_depth.sell_orders.keys())
         mm_bid = min(order_depth.buy_orders.keys())
 
         fair_value = (mm_ask + mm_bid) / 2
         take_width = 1
-
-        buy_order_volume = 0
-        sell_order_volume = 0
 
         if len(order_depth.sell_orders) != 0:
             # market taking
@@ -288,9 +289,9 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("KELP", best_ask, quantity))
                     buy_order_volume += quantity
-                    order_depth.sell_orders[best_ask] += quantity
-                    if order_depth.sell_orders[best_ask] == 0:
-                        del order_depth.sell_orders[best_ask]
+                    # order_depth.sell_orders[best_ask] += quantity
+                    # if order_depth.sell_orders[best_ask] == 0:
+                    #     del order_depth.sell_orders[best_ask]
 
         if len(order_depth.buy_orders) != 0:
             best_bid = max(order_depth.buy_orders.keys())
@@ -301,9 +302,9 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("KELP", best_bid, -1 * quantity))
                     sell_order_volume += quantity
-                    order_depth.buy_orders[best_bid] -= quantity
-                    if order_depth.buy_orders[best_bid] == 0:
-                        del order_depth.buy_orders[best_bid]
+                    # order_depth.buy_orders[best_bid] -= quantity
+                    # if order_depth.buy_orders[best_bid] == 0:
+                    #     del order_depth.buy_orders[best_bid]
 
         # make 0 ev trades to try to get back to 0 position
         orders, buy_order_volume, sell_order_volume = self.clear_orders(
@@ -356,24 +357,154 @@ class Trader:
 
         return orders
 
+    def ink(self, state: TradingState, limit: int, stored_data):
+        orders: List[Order] = []
+
+        order_depth = state.order_depths["SQUID_INK"]
+        position = state.position["SQUID_INK"] if "SQUID_INK" in state.position else 0
+
+        buy_order_volume = 0
+        sell_order_volume = 0
+
+        # fair value calculation: it seems that the fair is the mid-price of the highest ask and lowest bid
+        mm_ask = max(order_depth.sell_orders.keys())
+        mm_bid = min(order_depth.buy_orders.keys())
+
+        fair_value = (mm_ask + mm_bid) / 2
+        take_width = 1
+
+        # ARIMA(1, 1, 1) model
+        phi = 0.4268
+        theta = -0.507
+
+        if stored_data["SQUID_INK"]["last_price"] == 0:
+            stored_data["SQUID_INK"]["last_price"] = fair_value
+            stored_data["SQUID_INK"]["last_diff"] = 0.0
+            stored_data["SQUID_INK"]["last_error"] = 0.0
+            return orders
+
+        last_price = stored_data["SQUID_INK"]["last_price"]
+        last_diff = stored_data["SQUID_INK"]["last_diff"]
+        last_error = stored_data["SQUID_INK"]["last_error"]
+
+        Y_t = fair_value - last_price
+
+        e_t = Y_t - (phi * last_diff + theta * last_error)
+
+        forecast_price = fair_value + phi * Y_t + theta * e_t
+
+        logger.print(forecast_price, last_price, last_diff, last_error)
+
+        if len(order_depth.sell_orders) != 0:
+            # market taking
+            best_ask = min(order_depth.sell_orders.keys())
+            best_ask_amount = -1 * order_depth.sell_orders[best_ask]
+
+            if best_ask <= forecast_price - take_width:
+                quantity = min(best_ask_amount, limit - position)
+                if quantity > 0:
+                    orders.append(Order("SQUID_INK", best_ask, quantity))
+                    buy_order_volume += quantity
+                    # order_depth.sell_orders[best_ask] += quantity
+                    # if order_depth.sell_orders[best_ask] == 0:
+                    #     del order_depth.sell_orders[best_ask]
+
+        if len(order_depth.buy_orders) != 0:
+            best_bid = max(order_depth.buy_orders.keys())
+            best_bid_amount = order_depth.buy_orders[best_bid]
+
+            if best_bid >= forecast_price + take_width:
+                quantity = min(best_bid_amount, limit + position)
+                if quantity > 0:
+                    orders.append(Order("SQUID_INK", best_bid, -1 * quantity))
+                    sell_order_volume += quantity
+                    # order_depth.buy_orders[best_bid] -= quantity
+                    # if order_depth.buy_orders[best_bid] == 0:
+                    #     del order_depth.buy_orders[best_bid]
+
+        # make 0 ev trades to try to get back to 0 position
+        orders, buy_order_volume, sell_order_volume = self.clear_orders(
+            state,
+            "KELP",
+            buy_order_volume,
+            sell_order_volume,
+            forecast_price,
+            take_width,
+            limit,
+            orders
+        )
+
+        # market making
+        # if prices are at most this much above/below the fair, do not market make
+        disregard_edge = 0
+
+        # if prices are at most this much above/below the fair, join (market make at the same price)
+        join_edge = 1
+        asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > forecast_price + disregard_edge]
+        bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < forecast_price - disregard_edge]
+
+        best_ask_above_fair = min(asks_above_fair) if len(asks_above_fair) > 0 else None
+        best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
+
+        ask = forecast_price + 1
+        if best_ask_above_fair != None:
+            # joining criteria
+            if best_ask_above_fair - forecast_price <= join_edge:
+                ask = best_ask_above_fair
+            # pennying criteria (undercutting by the minimum)
+            else:
+                ask = best_ask_above_fair - 1
+
+        bid = forecast_price - 1
+        if best_bid_below_fair != None:
+            if abs(forecast_price - best_bid_below_fair) <= join_edge:
+                bid = best_bid_below_fair
+            else:
+                bid = best_bid_below_fair + 1
+
+        # how many buy orders we could put out
+        buy_quantity = limit - (position + buy_order_volume)
+        if buy_quantity > 0:
+            orders.append(Order("SQUID_INK", round(bid), buy_quantity))
+
+        sell_quantity = limit + (position - sell_order_volume)
+        if sell_quantity > 0:
+            orders.append(Order("SQUID_INK", round(ask), -1 * sell_quantity))
+
+        stored_data["SQUID_INK"]["last_price"] = fair_value
+        stored_data["SQUID_INK"]["last_diff"] = Y_t
+        stored_data["SQUID_INK"]["last_error"] = e_t
+
+        return orders
+
     def run(self, state: TradingState):
-        old_trader_data = json.loads(state.traderData) if state.traderData else {}
-        new_trader_data = {}
+        stored_data = json.loads(state.traderData) if state.traderData else {}
+
+        for product in ["RAINFOREST_RESIN", "KELP", "SQUID_INK"]:
+            if product not in stored_data:
+                stored_data[product] = {
+                    "last_price": 0,
+                    "last_diff": 0,
+                    "last_error": 0
+                }
 
         POSITION_LIMITS = {
             "RAINFOREST_RESIN": 50,
-            "KELP": 50
+            "KELP": 50,
+            "SQUID_INK": 50,
         }
 
         result = {}
 
-        for product in ["RAINFOREST_RESIN", "KELP"]:
+        for product in ["RAINFOREST_RESIN", "KELP", "SQUID_INK"]:
             if product == "RAINFOREST_RESIN":
                 result["RAINFOREST_RESIN"] = self.resin(state, POSITION_LIMITS["RAINFOREST_RESIN"])
             elif product == "KELP":
                 result["KELP"] = self.kelp(state, POSITION_LIMITS["KELP"])
+            elif product == "SQUID_INK":
+                result["SQUID_INK"] = self.ink(state, POSITION_LIMITS["SQUID_INK"], stored_data)
 
-        trader_data = json.dumps(new_trader_data, separators = (",", ":"))
+        trader_data = json.dumps(stored_data, separators = (",", ":"))
 
         conversions = 0
         logger.flush(state, result, conversions, trader_data)
