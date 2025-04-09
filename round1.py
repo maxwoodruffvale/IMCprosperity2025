@@ -833,122 +833,335 @@ class Trader:
     #         return orders
     def ink(self, state: TradingState, limit: int, stored_data):
         orders: List[Order] = []
+        product = "SQUID_INK"
+        order_depth = state.order_depths[product]
+        position = state.position.get(product, 0)
 
-        order_depth = state.order_depths["SQUID_INK"]
-        position = state.position["SQUID_INK"] if "SQUID_INK" in state.position else 0
+        if not order_depth.sell_orders or not order_depth.buy_orders:
+            return []
 
-        # Calculate current fair value
-        mm_ask = min(order_depth.sell_orders.keys()) if order_depth.sell_orders else None
-        mm_bid = max(order_depth.buy_orders.keys()) if order_depth.buy_orders else None
-        
-        if mm_ask is None or mm_bid is None:
-            return orders  # No orders if market is empty
-            
-        current_mid_price = (mm_ask + mm_bid) / 2
-        
-        # Store historical prices (keep only the last 100 to manage memory)
-        if "price_history" not in stored_data["SQUID_INK"]:
-            stored_data["SQUID_INK"]["price_history"] = []
-        stored_data["SQUID_INK"]["price_history"].append(current_mid_price)
-        if len(stored_data["SQUID_INK"]["price_history"]) > 100:
-            stored_data["SQUID_INK"]["price_history"].pop(0)
-        
-        # Simple ARIMA-like prediction (we'll use a simplified version since we can't import statsmodels)
-        predicted_price = current_mid_price  # Default to current price if we can't predict
-        
-        if len(stored_data["SQUID_INK"]["price_history"]) >= 20:  # Need enough data points
-            history = stored_data["SQUID_INK"]["price_history"]
-            
-            # Simple moving average (AR component)
+        best_ask = min(order_depth.sell_orders)
+        best_bid = max(order_depth.buy_orders)
+        current_mid = (best_ask + best_bid) / 2
+
+        # === Historical Price Update ===
+        if "price_history" not in stored_data[product]:
+            stored_data[product]["price_history"] = []
+        price_history = stored_data[product]["price_history"]
+        price_history.append(current_mid)
+        if len(price_history) > 100:
+            price_history.pop(0)
+
+        # === Predictive Fair Value ===
+        predicted_price = current_mid
+        if len(price_history) >= 20:
             ar_window = 5
-            ar_component = sum(history[-ar_window:]) / ar_window
-            
-            # Simple difference (I component)
-            diff = history[-1] - history[-2] if len(history) > 1 else 0
-            
-            # Simple momentum (MA component)
+            ar_component = sum(price_history[-ar_window:]) / ar_window
+            diff = price_history[-1] - price_history[-2] if len(price_history) > 1 else 0
             ma_window = 3
-            if len(history) >= ma_window + 1:
-                ma_component = sum(history[-i] - history[-i-1] for i in range(1, ma_window+1)) / ma_window
-            else:
-                ma_component = 0
-            
-            # Combine components with weights (these weights can be adjusted)
-            predicted_price = 0.6 * ar_component + 0.2 * (history[-1] + diff) + 0.2 * (history[-1] + ma_component)
-        
-        # Calculate fair value as weighted average between current mid and predicted price
-        fair_value = 0.7 * predicted_price + 0.3 * current_mid_price
-        
-        # Dynamic take width based on recent volatility
-        if len(stored_data["SQUID_INK"]["price_history"]) >= 10:
-            recent_prices = stored_data["SQUID_INK"]["price_history"][-10:]
-            price_std = np.std(recent_prices)
-            take_width = max(1, min(3, round(price_std * 0.67)))  # Clamped between 1 and 3
-        else:
-            take_width = 1
-        
+            ma_component = sum(price_history[-i] - price_history[-i-1] for i in range(1, ma_window+1)) / ma_window if len(price_history) >= ma_window + 1 else 0
+            predicted_price = 0.6 * ar_component + 0.2 * (price_history[-1] + diff) + 0.2 * (price_history[-1] + ma_component)
+
+        fair_value = 0.7 * predicted_price + 0.3 * current_mid
+
+        # === Volatility-Adaptive Spread ===
+        price_std = np.std(price_history[-10:]) if len(price_history) >= 10 else 0
+        take_width = max(1, min(3, round(price_std * 0.67)))
+        spread = max(1, take_width * 2)
+
+        # === Position-Aware Skew ===
+        skew = -min(2, position / 10) if position > 0 else min(2, -position / 10)
+
+        # === Market Taking ===
         buy_order_volume = 0
         sell_order_volume = 0
 
-        # Market taking - buy if ask is below fair value minus take width
-        if order_depth.sell_orders:
-            best_ask = min(order_depth.sell_orders.keys())
-            best_ask_amount = -order_depth.sell_orders[best_ask]
-            
-            if best_ask <= fair_value - take_width:
-                quantity = min(best_ask_amount, limit - position)
-                if quantity > 0:
-                    orders.append(Order("SQUID_INK", best_ask, quantity))
-                    buy_order_volume += quantity
+        if best_ask <= fair_value - take_width:
+            quantity = min(-order_depth.sell_orders[best_ask], limit - position)
+            if quantity > 0:
+                orders.append(Order(product, best_ask, quantity))
+                buy_order_volume += quantity
 
-        # Market taking - sell if bid is above fair value plus take width
-        if order_depth.buy_orders:
-            best_bid = max(order_depth.buy_orders.keys())
-            best_bid_amount = order_depth.buy_orders[best_bid]
-            
-            if best_bid >= fair_value + take_width:
-                quantity = min(best_bid_amount, limit + position)
-                if quantity > 0:
-                    orders.append(Order("SQUID_INK", best_bid, -quantity))
-                    sell_order_volume += quantity
+        if best_bid >= fair_value + take_width:
+            quantity = min(order_depth.buy_orders[best_bid], limit + position)
+            if quantity > 0:
+                orders.append(Order(product, best_bid, -quantity))
+                sell_order_volume += quantity
 
-        # Position clearing logic
-        orders, buy_order_volume, sell_order_volume = self.clear_orders(
-            state,
-            "SQUID_INK",
-            buy_order_volume,
-            sell_order_volume,
-            fair_value,
-            take_width,
-            limit,
-            orders
-        )
+        # === Market Making with Predicted Price Anchoring ===
+        disregard_edge = 1
+        join_edge = 2
 
-        # Market making with dynamic spreads based on volatility
-        spread = max(1, take_width * 2)  # Spread is twice the take width
-        position_adjustment = 0
-        
-        # Adjust prices based on current position
-        if position > 0:
-            position_adjustment = -min(2, position / 10)  # Lower prices if long
-        elif position < 0:
-            position_adjustment = min(2, -position / 10)  # Raise prices if short
+        asks_above_pred = [p for p in order_depth.sell_orders if p > predicted_price + disregard_edge]
+        bids_below_pred = [p for p in order_depth.buy_orders if p < predicted_price - disregard_edge]
 
-        bid_price = round(fair_value - spread + position_adjustment)
-        ask_price = round(fair_value + spread + position_adjustment)
+        best_ask_above = min(asks_above_pred) if asks_above_pred else None
+        best_bid_below = max(bids_below_pred) if bids_below_pred else None
 
-        # Calculate remaining quantities we can trade
+        ask = round(predicted_price + spread + skew)
+        if best_ask_above is not None:
+            ask = best_ask_above if best_ask_above - predicted_price <= join_edge else best_ask_above - 1
+
+        bid = round(predicted_price - spread + skew)
+        if best_bid_below is not None:
+            bid = best_bid_below if abs(predicted_price - best_bid_below) <= join_edge else best_bid_below + 1
+
         remaining_buy = limit - (position + buy_order_volume)
         remaining_sell = limit + (position - sell_order_volume)
 
-        # Post market making orders
         if remaining_buy > 0:
-            orders.append(Order("SQUID_INK", bid_price, remaining_buy))
-        
+            orders.append(Order(product, bid, remaining_buy))
         if remaining_sell > 0:
-            orders.append(Order("SQUID_INK", ask_price, -remaining_sell))
+            orders.append(Order(product, ask, -remaining_sell))
 
         return orders
+    # def ink(self, state: TradingState, limit: int, stored_data):
+    #     orders: List[Order] = []
+
+    #     order_depth = state.order_depths["SQUID_INK"]
+    #     position = state.position["SQUID_INK"] if "SQUID_INK" in state.position else 0
+
+    #     # Calculate current fair value
+    #     mm_ask = min(order_depth.sell_orders.keys()) if order_depth.sell_orders else None
+    #     mm_bid = max(order_depth.buy_orders.keys()) if order_depth.buy_orders else None
+        
+    #     if mm_ask is None or mm_bid is None:
+    #         return orders  # No orders if market is empty
+            
+    #     current_mid_price = (mm_ask + mm_bid) / 2
+        
+    #     # Store historical prices (keep only the last 100 to manage memory)
+    #     if "price_history" not in stored_data["SQUID_INK"]:
+    #         stored_data["SQUID_INK"]["price_history"] = []
+    #     stored_data["SQUID_INK"]["price_history"].append(current_mid_price)
+    #     if len(stored_data["SQUID_INK"]["price_history"]) > 100:
+    #         stored_data["SQUID_INK"]["price_history"].pop(0)
+        
+    #     # Simple ARIMA-like prediction (we'll use a simplified version since we can't import statsmodels)
+    #     predicted_price = current_mid_price  # Default to current price if we can't predict
+        
+    #     if len(stored_data["SQUID_INK"]["price_history"]) >= 20:  # Need enough data points
+    #         history = stored_data["SQUID_INK"]["price_history"]
+            
+    #         # Simple moving average (AR component)
+    #         ar_window = 5
+    #         ar_component = sum(history[-ar_window:]) / ar_window
+            
+    #         # Simple difference (I component)
+    #         diff = history[-1] - history[-2] if len(history) > 1 else 0
+            
+    #         # Simple momentum (MA component)
+    #         ma_window = 3
+    #         if len(history) >= ma_window + 1:
+    #             ma_component = sum(history[-i] - history[-i-1] for i in range(1, ma_window+1)) / ma_window
+    #         else:
+    #             ma_component = 0
+            
+    #         # Combine components with weights (these weights can be adjusted)
+    #         predicted_price = 0.6 * ar_component + 0.2 * (history[-1] + diff) + 0.2 * (history[-1] + ma_component)
+        
+    #     # Calculate fair value as weighted average between current mid and predicted price
+    #     fair_value = 0.7 * predicted_price + 0.3 * current_mid_price
+        
+    #     # Dynamic take width based on recent volatility
+    #     if len(stored_data["SQUID_INK"]["price_history"]) >= 10:
+    #         recent_prices = stored_data["SQUID_INK"]["price_history"][-10:]
+    #         price_std = np.std(recent_prices)
+    #         take_width = max(1, min(3, round(price_std * 0.67)))  # Clamped between 1 and 3
+    #     else:
+    #         take_width = 1
+        
+    #     buy_order_volume = 0
+    #     sell_order_volume = 0
+
+    #     # Market taking - buy if ask is below fair value minus take width
+    #     if order_depth.sell_orders:
+    #         best_ask = min(order_depth.sell_orders.keys())
+    #         best_ask_amount = -order_depth.sell_orders[best_ask]
+            
+    #         if best_ask <= fair_value - take_width:
+    #             quantity = min(best_ask_amount, limit - position)
+    #             if quantity > 0:
+    #                 orders.append(Order("SQUID_INK", best_ask, quantity))
+    #                 buy_order_volume += quantity
+
+    #     # Market taking - sell if bid is above fair value plus take width
+    #     if order_depth.buy_orders:
+    #         best_bid = max(order_depth.buy_orders.keys())
+    #         best_bid_amount = order_depth.buy_orders[best_bid]
+            
+    #         if best_bid >= fair_value + take_width:
+    #             quantity = min(best_bid_amount, limit + position)
+    #             if quantity > 0:
+    #                 orders.append(Order("SQUID_INK", best_bid, -quantity))
+    #                 sell_order_volume += quantity
+
+    #     # Position clearing logic
+    #     orders, buy_order_volume, sell_order_volume = self.clear_orders(
+    #         state,
+    #         "SQUID_INK",
+    #         buy_order_volume,
+    #         sell_order_volume,
+    #         fair_value,
+    #         take_width,
+    #         limit,
+    #         orders
+    #     )
+    #     disregard_edge = 1
+
+    #     # if prices are at most this much above/below the fair, join (market make at the same price)
+    #     join_edge = 2
+    #     asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > fair_value + disregard_edge]
+    #     bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < fair_value - disregard_edge]
+
+    #     best_ask_above_fair = min(asks_above_fair) if len(asks_above_fair) > 0 else None
+    #     best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
+
+    #     ask = fair_value + 1
+    #     if best_ask_above_fair != None:
+    #         # joining criteria
+    #         if best_ask_above_fair - fair_value <= join_edge:
+    #             ask = best_ask_above_fair
+    #         # pennying criteria (undercutting by the minimum)
+    #         else:
+    #             ask = best_ask_above_fair - 1
+
+    #     bid = fair_value - 1
+    #     if best_bid_below_fair != None:
+    #         if abs(fair_value - best_bid_below_fair) <= join_edge:
+    #             bid = best_bid_below_fair
+    #         else:
+    #             bid = best_bid_below_fair + 1
+
+    #     # how many buy orders we could put out
+    #     buy_quantity = limit - (position + buy_order_volume)
+    #     if buy_quantity > 0:
+    #         orders.append(Order("SQUID_INK", round(bid), buy_quantity))
+
+    #     sell_quantity = limit + (position - sell_order_volume)
+    #     if sell_quantity > 0:
+    #         orders.append(Order("SQUID_INK", round(ask), -1 * sell_quantity))
+    #     return orders
+
+
+    # def ink(self, state: TradingState, limit: int, stored_data):
+    #     orders: List[Order] = []
+
+    #     order_depth = state.order_depths["SQUID_INK"]
+    #     position = state.position["SQUID_INK"] if "SQUID_INK" in state.position else 0
+
+    #     # Calculate current fair value
+    #     mm_ask = min(order_depth.sell_orders.keys()) if order_depth.sell_orders else None
+    #     mm_bid = max(order_depth.buy_orders.keys()) if order_depth.buy_orders else None
+        
+    #     if mm_ask is None or mm_bid is None:
+    #         return orders  # No orders if market is empty
+            
+    #     current_mid_price = (mm_ask + mm_bid) / 2
+        
+    #     # Store historical prices (keep only the last 100 to manage memory)
+    #     if "price_history" not in stored_data["SQUID_INK"]:
+    #         stored_data["SQUID_INK"]["price_history"] = []
+    #     stored_data["SQUID_INK"]["price_history"].append(current_mid_price)
+    #     if len(stored_data["SQUID_INK"]["price_history"]) > 100:
+    #         stored_data["SQUID_INK"]["price_history"].pop(0)
+        
+    #     # Simple ARIMA-like prediction (we'll use a simplified version since we can't import statsmodels)
+    #     predicted_price = current_mid_price  # Default to current price if we can't predict
+        
+    #     if len(stored_data["SQUID_INK"]["price_history"]) >= 20:  # Need enough data points
+    #         history = stored_data["SQUID_INK"]["price_history"]
+            
+    #         # Simple moving average (AR component)
+    #         ar_window = 5
+    #         ar_component = sum(history[-ar_window:]) / ar_window
+            
+    #         # Simple difference (I component)
+    #         diff = history[-1] - history[-2] if len(history) > 1 else 0
+            
+    #         # Simple momentum (MA component)
+    #         ma_window = 3
+    #         if len(history) >= ma_window + 1:
+    #             ma_component = sum(history[-i] - history[-i-1] for i in range(1, ma_window+1)) / ma_window
+    #         else:
+    #             ma_component = 0
+            
+    #         # Combine components with weights (these weights can be adjusted)
+    #         predicted_price = 0.6 * ar_component + 0.2 * (history[-1] + diff) + 0.2 * (history[-1] + ma_component)
+        
+    #     # Calculate fair value as weighted average between current mid and predicted price
+    #     fair_value = 0.7 * predicted_price + 0.3 * current_mid_price
+        
+    #     # Dynamic take width based on recent volatility
+    #     if len(stored_data["SQUID_INK"]["price_history"]) >= 10:
+    #         recent_prices = stored_data["SQUID_INK"]["price_history"][-10:]
+    #         price_std = np.std(recent_prices)
+    #         take_width = max(1, min(3, round(price_std * 0.67)))  # Clamped between 1 and 3
+    #     else:
+    #         take_width = 1
+        
+    #     buy_order_volume = 0
+    #     sell_order_volume = 0
+
+    #     # Market taking - buy if ask is below fair value minus take width
+    #     if order_depth.sell_orders:
+    #         best_ask = min(order_depth.sell_orders.keys())
+    #         best_ask_amount = -order_depth.sell_orders[best_ask]
+            
+    #         if best_ask <= fair_value - take_width:
+    #             quantity = min(best_ask_amount, limit - position)
+    #             if quantity > 0:
+    #                 orders.append(Order("SQUID_INK", best_ask, quantity))
+    #                 buy_order_volume += quantity
+
+    #     # Market taking - sell if bid is above fair value plus take width
+    #     if order_depth.buy_orders:
+    #         best_bid = max(order_depth.buy_orders.keys())
+    #         best_bid_amount = order_depth.buy_orders[best_bid]
+            
+    #         if best_bid >= fair_value + take_width:
+    #             quantity = min(best_bid_amount, limit + position)
+    #             if quantity > 0:
+    #                 orders.append(Order("SQUID_INK", best_bid, -quantity))
+    #                 sell_order_volume += quantity
+
+    #     # Position clearing logic
+    #     orders, buy_order_volume, sell_order_volume = self.clear_orders(
+    #         state,
+    #         "SQUID_INK",
+    #         buy_order_volume,
+    #         sell_order_volume,
+    #         fair_value,
+    #         take_width,
+    #         limit,
+    #         orders
+    #     )
+        #New Market making strategy
+        # Market making with dynamic spreads based on volatility
+        # spread = max(1, take_width * 2)  # Spread is twice the take width
+        # position_adjustment = 0
+        
+        # # Adjust prices based on current position
+        # if position > 0:
+        #     position_adjustment = -min(2, position / 10)  # Lower prices if long
+        # elif position < 0:
+        #     position_adjustment = min(2, -position / 10)  # Raise prices if short
+
+        # bid_price = round(fair_value - spread + position_adjustment)
+        # ask_price = round(fair_value + spread + position_adjustment)
+
+        # # Calculate remaining quantities we can trade
+        # remaining_buy = limit - (position + buy_order_volume)
+        # remaining_sell = limit + (position - sell_order_volume)
+
+        # # Post market making orders
+        # if remaining_buy > 0:
+        #     orders.append(Order("SQUID_INK", bid_price, remaining_buy))
+        
+        # if remaining_sell > 0:
+        #     orders.append(Order("SQUID_INK", ask_price, -remaining_sell))
+
+        # return orders
 
     def run(self, state: TradingState):
         stored_data = json.loads(state.traderData) if state.traderData else {}
