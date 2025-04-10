@@ -173,6 +173,8 @@ class Trader:
 
     # resin strategy
     def resin(self, state: TradingState, limit: int):
+
+
         orders: List[Order] = []
 
         order_depth = state.order_depths["RAINFOREST_RESIN"]
@@ -357,6 +359,7 @@ class Trader:
 
         return orders
 
+    # ink strategy
     def ink(self, state: TradingState, limit: int, stored_data):
         orders: List[Order] = []
 
@@ -425,7 +428,7 @@ class Trader:
         # make 0 ev trades to try to get back to 0 position
         orders, buy_order_volume, sell_order_volume = self.clear_orders(
             state,
-            "KELP",
+            "SQUID_INK",
             buy_order_volume,
             sell_order_volume,
             forecast_price,
