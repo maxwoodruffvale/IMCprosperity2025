@@ -1,0 +1,13 @@
+backtests/
+__pycache__/blee.cpython-312.pyc
+__pycache__/datamodel.cpython-312.pyc
+__pycache__/kelp_strategy.cpython-312.pyc
+__pycache__/main.cpython-312.pyc
+__pycache__/main2.cpython-312.pyc
+__pycache__/main3.cpython-312.pyc
+__pycache__/resin_strategy.cpython-312.pyc
+__pycache__/Roundv1.cpython-312.pyc
+__pycache__/squid_ink_strategy.cpython-312.pyc
+__pycache__/template.cpython-312.pyc
+__pycache__/tester.cpython-312.pyc
+__pycache__/tutorialfinal.cpython-312.pyc

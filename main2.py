@@ -1,7 +1,8 @@
 # WHEN SUBMITTING FINAL SUBMISSION, CHANGE json AND ASSOCIATED FUNCTIONS TO jsonpickle AND REMOVE LOGGER
 
 from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
-from typing import Any, List
+from typing import Any, List, Dict
+import numpy as np
 import json
 import math
 
@@ -171,7 +172,7 @@ class Trader:
         return orders, buy_order_volume, sell_order_volume
 
     # resin strategy
-    def resin(self, state: TradingState, limit: int):
+    def resin_strategy(self, state: TradingState, limit: int) -> List[Order]:
         orders: List[Order] = []
 
         order_depth = state.order_depths["RAINFOREST_RESIN"]
@@ -193,9 +194,6 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("RAINFOREST_RESIN", best_ask, quantity))
                     buy_order_volume += quantity
-                    order_depth.sell_orders[best_ask] += quantity
-                    if order_depth.sell_orders[best_ask] == 0:
-                        del order_depth.sell_orders[best_ask]
 
         if len(order_depth.buy_orders) != 0:
             best_bid = max(order_depth.buy_orders.keys())
@@ -206,9 +204,6 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("RAINFOREST_RESIN", best_bid, -1 * quantity))
                     sell_order_volume += quantity
-                    order_depth.buy_orders[best_bid] -= quantity
-                    if order_depth.buy_orders[best_bid] == 0:
-                        del order_depth.buy_orders[best_bid]
 
         # make 0 ev trades to try to get back to 0 position
         orders, buy_order_volume, sell_order_volume = self.clear_orders(
@@ -224,10 +219,10 @@ class Trader:
 
         # market making
         # if prices are at most this much above/below the fair, do not market make
-        disregard_edge = 0
+        disregard_edge = 1
 
         # if prices are at most this much above/below the fair, join (market make at the same price)
-        join_edge = 1
+        join_edge = 2
         asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > fair_value + disregard_edge]
         bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < fair_value - disregard_edge]
 
@@ -235,7 +230,7 @@ class Trader:
         best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
 
         ask = 10005
-        if best_ask_above_fair != None:
+        if best_ask_above_fair is not None:
             # joining criteria
             if best_ask_above_fair - fair_value <= join_edge:
                 ask = best_ask_above_fair
@@ -244,7 +239,7 @@ class Trader:
                 ask = best_ask_above_fair - 1
 
         bid = 9995
-        if best_bid_below_fair != None:
+        if best_bid_below_fair is not None:
             if abs(fair_value - best_bid_below_fair) <= join_edge:
                 bid = best_bid_below_fair
             else:
@@ -258,17 +253,119 @@ class Trader:
         sell_quantity = limit + (position - sell_order_volume)
         if sell_quantity > 0:
             orders.append(Order("RAINFOREST_RESIN", round(ask), -1 * sell_quantity))
-
         return orders
 
-    # kelp strategy
-    def kelp(self, state: TradingState, limit: int):
+  
+    def forecast_fair_value(self, history: list[float], current_price: float) -> float:
+        if len(history) < 6:
+            return current_price
+
+        ar_window = 5
+        ma_window = 3
+
+        ar_component = sum(history[-ar_window:]) / ar_window
+        diff = history[-1] - history[-2]
+        ma_component = sum(history[-i] - history[-i-1] for i in range(1, ma_window+1)) / ma_window
+
+        predicted = 0.6 * ar_component + 0.2 * (history[-1] + diff) + 0.2 * (history[-1] + ma_component)
+        fair_value = 0.7 * predicted + 0.3 * current_price
+
+        return fair_value
+
+    def momentum(self,
+                 state: TradingState,
+                 limit: int,
+                 window: int,
+                 momentum: float,
+                 sticky,
+                 stored_data,
+                 orders: List[Order],
+                 fair_value: float,
+                 momentum_override: bool,
+                 direction,
+                 ):
+        if len(stored_data["SQUID_INK"]["mins"]) < window:
+            return False, None, orders
+
+        order_depth = state.order_depths["SQUID_INK"]
+        position = state.position["SQUID_INK"]
+
+        stored_data["SQUID_INK"]["maxs"] = stored_data["SQUID_INK"]["maxs"][-(sticky * window):]
+        stored_data["SQUID_INK"]["mins"] = stored_data["SQUID_INK"]["mins"][-(sticky * window):]
+        stored_data["SQUID_INK"]["mm_prices"] = stored_data["SQUID_INK"]["mm_prices"][-window:]
+
+        biggest_max = max(stored_data["SQUID_INK"]["maxs"][-window:-1])
+        smallest_min = min(stored_data["SQUID_INK"]["mins"][-window:-1])
+        sticky_max = max(stored_data["SQUID_INK"]["maxs"])
+        sticky_min = min(stored_data["SQUID_INK"]["mins"])
+
+        # if we are not momentum trading, check the following
+        if not momentum_override:
+            test_up = fair_value - (smallest_min + momentum)
+            test_down = (biggest_max - momentum) - fair_value
+
+            # if our fair is much higher than the smallest min, we are on an upswing and need to buy
+            if fair_value >= smallest_min + momentum and test_up > test_down:
+                best_ask = min(order_depth.sell_orders.keys())
+                best_ask_amount = -1 * order_depth.sell_orders[best_ask]
+                quantity = min(best_ask_amount, limit - position)
+                orders.append(Order("SQUID_INK", best_ask, quantity))
+                momentum_override = True
+                direction = True
+
+            elif fair_value <= biggest_max - momentum and test_down > test_up:
+                best_bid = max(order_depth.buy_orders.keys())
+                best_bid_amount = order_depth.buy_orders[best_bid]
+                quantity = min(best_bid_amount, limit + position)
+                orders.append(Order("SQUID_INK", best_bid, -1 * quantity))
+                momentum_override = True
+                direction = False
+
+        else:
+            if direction:
+                # if we stopped swinging up, immediately stop momentum trading and sell
+                if fair_value < sticky_min:
+                    best_bid = max(order_depth.buy_orders.keys())
+                    best_bid_amount = order_depth.buy_orders[best_bid]
+                    quantity = min(best_bid_amount, limit + position)
+                    orders.append(Order("SQUID_INK", best_bid, -1 * quantity))
+                    momentum_override = False
+                    direction = None
+
+                # otherwise keep on buying
+                else:
+                    best_ask = min(order_depth.sell_orders.keys())
+                    best_ask_amount = -1 * order_depth.sell_orders[best_ask]
+                    quantity = min(best_ask_amount, limit - position)
+                    orders.append(Order("SQUID_INK", best_ask, quantity))
+
+            else:
+                if fair_value > sticky_max:
+                    best_ask = min(order_depth.sell_orders.keys())
+                    best_ask_amount = -1 * order_depth.sell_orders[best_ask]
+                    quantity = min(best_ask_amount, limit - position)
+                    orders.append(Order("SQUID_INK", best_ask, quantity))
+                    momentum_override = False
+                    direction = None
+
+                else:
+                    best_bid = max(order_depth.buy_orders.keys())
+                    best_bid_amount = order_depth.buy_orders[best_bid]
+                    quantity = min(best_bid_amount, limit + position)
+                    orders.append(Order("SQUID_INK", best_bid, -1 * quantity))
+
+        return momentum_override, direction, orders
+
+    def kelp_strategy(self, state: TradingState, limit: int) -> List[Order]:
         orders: List[Order] = []
 
         order_depth = state.order_depths["KELP"]
         position = state.position["KELP"] if "KELP" in state.position else 0
 
         # fair value calculation: it seems that the fair is the mid-price of the highest ask and lowest bid
+        if not order_depth.sell_orders or not order_depth.buy_orders:
+            return orders  # Return empty list if no orders to determine fair value
+
         mm_ask = max(order_depth.sell_orders.keys())
         mm_bid = min(order_depth.buy_orders.keys())
 
@@ -288,9 +385,6 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("KELP", best_ask, quantity))
                     buy_order_volume += quantity
-                    order_depth.sell_orders[best_ask] += quantity
-                    if order_depth.sell_orders[best_ask] == 0:
-                        del order_depth.sell_orders[best_ask]
 
         if len(order_depth.buy_orders) != 0:
             best_bid = max(order_depth.buy_orders.keys())
@@ -301,9 +395,6 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("KELP", best_bid, -1 * quantity))
                     sell_order_volume += quantity
-                    order_depth.buy_orders[best_bid] -= quantity
-                    if order_depth.buy_orders[best_bid] == 0:
-                        del order_depth.buy_orders[best_bid]
 
         # make 0 ev trades to try to get back to 0 position
         orders, buy_order_volume, sell_order_volume = self.clear_orders(
@@ -330,7 +421,7 @@ class Trader:
         best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
 
         ask = fair_value + 1
-        if best_ask_above_fair != None:
+        if best_ask_above_fair is not None:
             # joining criteria
             if best_ask_above_fair - fair_value <= join_edge:
                 ask = best_ask_above_fair
@@ -339,7 +430,7 @@ class Trader:
                 ask = best_ask_above_fair - 1
 
         bid = fair_value - 1
-        if best_bid_below_fair != None:
+        if best_bid_below_fair is not None:
             if abs(fair_value - best_bid_below_fair) <= join_edge:
                 bid = best_bid_below_fair
             else:
@@ -356,24 +447,131 @@ class Trader:
 
         return orders
 
+    def ink(self, state: TradingState, limit: int, stored_data):
+        orders: List[Order] = []
+        product = "SQUID_INK"
+        order_depth = state.order_depths[product]
+        position = state.position.get(product, 0)
+
+        if not order_depth.sell_orders or not order_depth.buy_orders:
+            return []
+
+        best_ask = min(order_depth.sell_orders)
+        best_bid = max(order_depth.buy_orders)
+        current_mid = (best_ask + best_bid) / 2
+
+        # === Historical Price Update ===
+        if "price_history" not in stored_data[product]:
+            stored_data[product]["price_history"] = []
+        price_history = stored_data[product]["price_history"]
+        price_history.append(current_mid)
+        if len(price_history) > 100:
+            price_history.pop(0)
+
+        # === Predictive Fair Value ===
+        predicted_price = current_mid
+        if len(price_history) >= 20:
+            ar_window = 5
+            ar_component = sum(price_history[-ar_window:]) / ar_window
+            diff = price_history[-1] - price_history[-2] if len(price_history) > 1 else 0
+            ma_window = 3
+            ma_component = sum(price_history[-i] - price_history[-i-1] for i in range(1, ma_window+1)) / ma_window if len(price_history) >= ma_window + 1 else 0
+            predicted_price = 0.6 * ar_component + 0.2 * (price_history[-1] + diff) + 0.2 * (price_history[-1] + ma_component)
+
+        fair_value = 0.7 * predicted_price + 0.3 * current_mid
+
+        # === Volatility-Adaptive Spread ===
+        price_std = np.std(price_history[-10:]) if len(price_history) >= 10 else 0
+        take_width = max(1, min(3, round(price_std * 0.67)))
+        spread = max(1, take_width * 2)
+
+        # === Position-Aware Skew ===
+        skew = -min(2, position / 10) if position > 0 else min(2, -position / 10)
+
+        # === Market Taking ===
+        buy_order_volume = 0
+        sell_order_volume = 0
+
+        if best_ask <= fair_value - take_width:
+            quantity = min(-order_depth.sell_orders[best_ask], limit - position)
+            if quantity > 0:
+                orders.append(Order(product, best_ask, quantity))
+                buy_order_volume += quantity
+
+        if best_bid >= fair_value + take_width:
+            quantity = min(order_depth.buy_orders[best_bid], limit + position)
+            if quantity > 0:
+                orders.append(Order(product, best_bid, -quantity))
+                sell_order_volume += quantity
+
+        # === Market Making with Predicted Price Anchoring ===
+        disregard_edge = 1
+        join_edge = 2
+
+        asks_above_pred = [p for p in order_depth.sell_orders if p > predicted_price + disregard_edge]
+        bids_below_pred = [p for p in order_depth.buy_orders if p < predicted_price - disregard_edge]
+
+        best_ask_above = min(asks_above_pred) if asks_above_pred else None
+        best_bid_below = max(bids_below_pred) if bids_below_pred else None
+
+        ask = round(predicted_price + spread + skew)
+        if best_ask_above is not None:
+            ask = best_ask_above if best_ask_above - predicted_price <= join_edge else best_ask_above - 1
+
+        bid = round(predicted_price - spread + skew)
+        if best_bid_below is not None:
+            bid = best_bid_below if abs(predicted_price - best_bid_below) <= join_edge else best_bid_below + 1
+
+        remaining_buy = limit - (position + buy_order_volume)
+        remaining_sell = limit + (position - sell_order_volume)
+
+        if remaining_buy > 0:
+            orders.append(Order(product, bid, remaining_buy))
+        if remaining_sell > 0:
+            orders.append(Order(product, ask, -remaining_sell))
+
+        return orders
+    
     def run(self, state: TradingState):
-        old_trader_data = json.loads(state.traderData) if state.traderData else {}
-        new_trader_data = {}
+        stored_data = json.loads(state.traderData) if state.traderData else {}
+
+        for product in ["RAINFOREST_RESIN", "KELP", "SQUID_INK"]:
+            if product not in stored_data:
+                stored_data[product] = {}
+            if "mins" not in stored_data[product]:
+                stored_data[product]["mins"] = []
+            if "maxs" not in stored_data[product]:
+                stored_data[product]["maxs"] = []
+            if "mm_prices" not in stored_data[product]:
+                stored_data[product]["mm_prices"] = []
+            # the pair[0] means True if we are in momentum, pair[1] means True if we are swinging up, False if down
+            if "momentum_override" not in stored_data[product]:
+                stored_data[product]["momentum_override"] = (False, None)
+            if "fair_history" not in stored_data:
+                stored_data["fair_history"] = {
+                    "SQUID_INK": [],
+                    "KELP": [],
+                    "RAINFOREST_RESIN": []
+                }
 
         POSITION_LIMITS = {
             "RAINFOREST_RESIN": 50,
-            "KELP": 50
+            "KELP": 50,
+            "SQUID_INK": 50,
         }
 
         result = {}
 
-        for product in ["RAINFOREST_RESIN", "KELP"]:
+        for product in ["RAINFOREST_RESIN", "KELP", "SQUID_INK"]:
             if product == "RAINFOREST_RESIN":
-                result["RAINFOREST_RESIN"] = self.resin(state, POSITION_LIMITS["RAINFOREST_RESIN"])
-            elif product == "KELP":
-                result["KELP"] = self.kelp(state, POSITION_LIMITS["KELP"])
+                result["RAINFOREST_RESIN"] = self.resin_strategy(state, POSITION_LIMITS["RAINFOREST_RESIN"])
 
-        trader_data = json.dumps(new_trader_data, separators = (",", ":"))
+            elif product == "KELP":
+                result["KELP"] = self.kelp_strategy(state, POSITION_LIMITS["KELP"])
+            elif product == "SQUID_INK":
+                result["SQUID_INK"] = self.ink(state, POSITION_LIMITS["SQUID_INK"], stored_data)
+
+        trader_data = json.dumps(stored_data, separators = (",", ":"))
 
         conversions = 0
         logger.flush(state, result, conversions, trader_data)
