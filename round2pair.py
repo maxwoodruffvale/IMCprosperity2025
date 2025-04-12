@@ -5,7 +5,7 @@ from typing import Any, List, Dict
 import numpy as np
 import json
 import math
-
+import statistics
 
 class Logger:
     def __init__(self) -> None:
@@ -120,9 +120,7 @@ class Logger:
 
         return value[: max_length - 3] + "..."
 
-
 logger = Logger()
-
 
 class Trader:
     # make 0ev trades to try to get back to 0 position
@@ -363,117 +361,144 @@ class Trader:
 
         return orders
 
-    # finds fair value
-    def forecast_fair_value(self, history: list[float], current_price: float) -> float:
-        if len(history) < 6:
-            return current_price
-
-        ar_window = 5
-        ma_window = 3
-
-        ar_component = sum(history[-ar_window:]) / ar_window
-        diff = history[-1] - history[-2]
-        ma_component = sum(history[-i] - history[-i - 1] for i in range(1, ma_window + 1)) / ma_window
-
-        predicted = 0.6 * ar_component + 0.2 * (history[-1] + diff) + 0.2 * (history[-1] + ma_component)
-        fair_value = 0.7 * predicted + 0.3 * current_price
-
-        return fair_value
-
     # ink strategy
     def ink_strategy(self, state: TradingState, limit: int, stored_data):
         orders: List[Order] = []
-        product = "SQUID_INK"
-        order_depth = state.order_depths[product]
-        position = state.position.get(product, 0)
 
-        if not order_depth.sell_orders or not order_depth.buy_orders:
-            return []
+        order_depth = state.order_depths["SQUID_INK"]
+        position = state.position["SQUID_INK"] if "SQUID_INK" in state.position else 0
 
-        best_ask = min(order_depth.sell_orders)
-        best_bid = max(order_depth.buy_orders)
-        current_mid = (best_ask + best_bid) / 2
-
-        # === Historical Price Update ===
-        if "price_history" not in stored_data[product]:
-            stored_data[product]["price_history"] = []
-        price_history = stored_data[product]["price_history"]
-        price_history.append(current_mid)
-        if len(price_history) > 100:
-            price_history.pop(0)
-
-        # === Predictive Fair Value ===
-        predicted_price = current_mid
-        if len(price_history) >= 20:
-            ar_window = 5
-            ar_component = sum(price_history[-ar_window:]) / ar_window
-            diff = price_history[-1] - price_history[-2] if len(price_history) > 1 else 0
-            ma_window = 3
-            ma_component = sum(
-                price_history[-i] - price_history[-i - 1] for i in range(1, ma_window + 1)) / ma_window if len(
-                price_history) >= ma_window + 1 else 0
-            predicted_price = 0.55 * ar_component + 0.25 * (price_history[-1] + diff) + 0.2 * (
-                        price_history[-1] + ma_component)
-
-        fair_value = 0.7 * predicted_price + 0.3 * current_mid
-
-        # === Volatility-Adaptive Spread ===
-        price_std = np.std(price_history[-10:]) if len(price_history) >= 10 else 0
-        take_width = max(1, min(3, round(price_std * 0.67)))
-        spread = max(1, take_width * 2)
-
-        # === Position-Aware Skew ===
-        skew = -min(2, position / 10) if position > 0 else min(2, -position / 10)
-
-        # === Market Taking ===
         buy_order_volume = 0
         sell_order_volume = 0
 
-        if best_ask <= fair_value - take_width:
-            quantity = min(-order_depth.sell_orders[best_ask], limit - position)
-            if quantity > 0:
-                orders.append(Order(product, best_ask, quantity))
-                buy_order_volume += quantity
-                # order_depth.sell_orders[best_ask] += quantity
-                # if order_depth.sell_orders[best_ask] == 0:
-                #     del order_depth.sell_orders[best_ask]
+        # fair value calculation: it seems that the fair is the mid-price of the highest ask and lowest bid
+        mm_ask = max(order_depth.sell_orders.keys())
+        mm_bid = min(order_depth.buy_orders.keys())
 
-        if best_bid >= fair_value + take_width:
-            quantity = min(order_depth.buy_orders[best_bid], limit + position)
-            if quantity > 0:
-                orders.append(Order(product, best_bid, -quantity))
-                sell_order_volume += quantity
-                # order_depth.buy_orders[best_bid] -= quantity
-                # if order_depth.buy_orders[best_bid] == 0:
-                #     del order_depth.buy_orders[best_bid]
+        fair_value = (mm_ask + mm_bid) / 2
+        take_width = 0.3
 
-        # === Market Making with Predicted Price Anchoring ===
+        # swing based on z score of rolling avg of returns
+        # if above certain amount, sell since mean reversion, if below buy
+        window = 50
+        z_score_threshold = 2
+
+        stored_data["SQUID_INK"]["spread_history"].append(fair_value)
+
+        if len(stored_data["SQUID_INK"]["spread_history"]) < 5:
+            return orders
+        if len(stored_data["SQUID_INK"]["spread_history"]) > window:
+            stored_data["SQUID_INK"]["spread_history"].pop(0)
+
+        mean_price = np.average(stored_data["SQUID_INK"]["spread_history"])
+
+        std_price = np.std(stored_data["SQUID_INK"]["spread_history"])
+
+        z_score = (fair_value - mean_price) / std_price
+
+        # if above certain amount, sell due to mean reversion
+        if z_score > z_score_threshold:
+            best_bid = max(order_depth.buy_orders.keys())
+            best_bid_amount = order_depth.buy_orders[best_bid]
+
+            if best_bid >= fair_value + take_width:
+                quantity = min(best_bid_amount, limit + position)
+                if quantity > 0:
+                    orders.append(Order("SQUID_INK", best_bid, -1 * quantity))
+                    sell_order_volume += quantity
+
+                    # order_depth.buy_orders[best_bid] -= quantity
+                    # if order_depth.buy_orders[best_bid] == 0:
+                    #     del order_depth.buy_orders[best_bid]
+
+        if z_score < -z_score_threshold:
+            best_ask = min(order_depth.sell_orders.keys())
+            best_ask_amount = -1 * order_depth.sell_orders[best_ask]
+
+            if best_ask <= fair_value - take_width:
+                quantity = min(best_ask_amount, limit - position)
+                if quantity > 0:
+                    orders.append(Order("SQUID_INK", best_ask, quantity))
+                    buy_order_volume += quantity
+
+                    # order_depth.sell_orders[best_ask] += quantity
+                    # if order_depth.sell_orders[best_ask] == 0:
+                    #     del order_depth.sell_orders[best_ask]
+
+        # else:
+        #     best_ask = min(order_depth.sell_orders.keys())
+        #     best_ask_amount = -1 * order_depth.sell_orders[best_ask]
+        #
+        #     if best_ask <= fair_value - take_width:
+        #         quantity = min(best_ask_amount, limit - position)
+        #         if quantity > 0:
+        #             orders.append(Order("SQUID_INK", best_ask, quantity))
+        #             buy_order_volume += quantity
+        #             # order_depth.sell_orders[best_ask] += quantity
+        #             # if order_depth.sell_orders[best_ask] == 0:
+        #             #     del order_depth.sell_orders[best_ask]
+        #
+        #     best_bid = max(order_depth.buy_orders.keys())
+        #     best_bid_amount = order_depth.buy_orders[best_bid]
+        #
+        #     if best_bid >= fair_value + take_width:
+        #         quantity = min(best_bid_amount, limit + position)
+        #         if quantity > 0:
+        #             orders.append(Order("SQUID_INK", best_bid, -1 * quantity))
+        #             sell_order_volume += quantity
+        #             # order_depth.buy_orders[best_bid] -= quantity
+        #             # if order_depth.buy_orders[best_bid] == 0:
+        #             #     del order_depth.buy_orders[best_bid]
+
+        # make 0 ev trades to try to get back to 0 position
+        orders, buy_order_volume, sell_order_volume = self.clear_orders(
+            state,
+            "SQUID_INK",
+            buy_order_volume,
+            sell_order_volume,
+            fair_value,
+            take_width,
+            limit,
+            orders
+        )
+
+        # market making
+        # if prices are at most this much above/below the fair, do not market make
         disregard_edge = 1
+
+        # if prices are at most this much above/below the fair, join (market make at the same price)
         join_edge = 2
 
-        asks_above_pred = [p for p in order_depth.sell_orders if
-                           p > predicted_price * .5 + fair_value * .5 + disregard_edge]
-        bids_below_pred = [p for p in order_depth.buy_orders if
-                           p < predicted_price * .5 + fair_value * .5 - disregard_edge]
+        asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > fair_value + disregard_edge]
+        bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < fair_value - disregard_edge]
 
-        best_ask_above = min(asks_above_pred) if asks_above_pred else None
-        best_bid_below = max(bids_below_pred) if bids_below_pred else None
+        best_ask_above_fair = min(asks_above_fair) if len(asks_above_fair) > 0 else None
+        best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
 
-        ask = round(predicted_price + spread + skew)
-        if best_ask_above is not None:
-            ask = best_ask_above if best_ask_above - predicted_price <= join_edge else best_ask_above - 1
+        ask = fair_value + 1
+        if best_ask_above_fair != None:
+            # joining criteria
+            if best_ask_above_fair - fair_value <= join_edge:
+                ask = best_ask_above_fair
+            # pennying criteria (undercutting by the minimum)
+            else:
+                ask = best_ask_above_fair - 1
 
-        bid = round(predicted_price - spread + skew)
-        if best_bid_below is not None:
-            bid = best_bid_below if abs(predicted_price - best_bid_below) <= join_edge else best_bid_below + 1
+        bid = fair_value - 1
+        if best_bid_below_fair != None:
+            if abs(fair_value - best_bid_below_fair) <= join_edge:
+                bid = best_bid_below_fair
+            else:
+                bid = best_bid_below_fair + 1
 
-        remaining_buy = limit - (position + buy_order_volume)
-        remaining_sell = limit + (position - sell_order_volume)
+        # how many buy orders we could put out
+        buy_quantity = limit - (position + buy_order_volume)
+        if buy_quantity > 0:
+            orders.append(Order("SQUID_INK", round(bid), buy_quantity))
 
-        if remaining_buy > 0:
-            orders.append(Order(product, bid, remaining_buy))
-        if remaining_sell > 0:
-            orders.append(Order(product, ask, -remaining_sell))
+        sell_quantity = limit + (position - sell_order_volume)
+        if sell_quantity > 0:
+            orders.append(Order("SQUID_INK", round(ask), -1 * sell_quantity))
 
         return orders
 
@@ -497,6 +522,9 @@ class Trader:
             croissants_price = max(order_depths["CROISSANTS"].buy_orders.keys())
             jams_price = max(order_depths["JAMS"].buy_orders.keys())
             djembes_price = max(order_depths["DJEMBES"].buy_orders.keys())
+
+        elif quantity == 0:
+            croissants_price = jams_price = djembes_price = 0
 
         croissants_order = Order("CROISSANTS", croissants_price, quantity * 6)
         jams_order = Order("JAMS", jams_price, quantity * 3)
@@ -523,15 +551,41 @@ class Trader:
 
         croissants_ask_volume = -1 * order_depths["CROISSANTS"].sell_orders[croissants_best_ask]
         croissants_bid_volume = order_depths["CROISSANTS"].buy_orders[croissants_best_bid]
+        try:
+            croissants_position = state.position["CROISSANTS"]
+        except:
+            croissants_position = 0
+
+        logger.print(f"Croissants Position is {croissants_position}")
 
         jams_ask_volume = -1 * order_depths["JAMS"].sell_orders[jams_best_ask]
         jams_bid_volume = order_depths["JAMS"].buy_orders[jams_best_bid]
+        try:
+            jams_position = state.position["JAMS"]
+        except:
+            jams_position = 0
+
+        logger.print(f"Jams Position is {jams_position}")
 
         djembes_ask_volume = -1 * order_depths["DJEMBES"].sell_orders[djembes_best_ask]
         djembes_bid_volume = order_depths["DJEMBES"].buy_orders[djembes_best_bid]
+        try:
+            djembes_position = state.position["DJEMBES"]
+        except:
+            djembes_position = 0
 
-        synthetic_ask_volume = min(croissants_ask_volume, jams_ask_volume, djembes_ask_volume)
-        synthetic_bid_volume = min(croissants_bid_volume, jams_bid_volume, djembes_bid_volume)
+        logger.print(f"Djembes Position is {djembes_position}")
+
+        synthetic_ask_volume = min(int(croissants_ask_volume / 6), int((250 - croissants_position) / 6),
+                                   int(jams_ask_volume / 3), int((350 - jams_position) / 3),
+                                   int(djembes_ask_volume), int(60 - djembes_position),
+                                   )
+        synthetic_bid_volume = min(int(croissants_bid_volume / 6), int((250 + croissants_position) / 6),
+                                   int(jams_bid_volume / 3), int((350 + jams_position) / 3),
+                                   int(djembes_bid_volume), int(60 + djembes_position),
+                                   )
+
+        logger.print(f"Synthetic Ask/Bid Vol is {synthetic_ask_volume}, {synthetic_bid_volume}")
 
         synthetic_order_depth.sell_orders[synthetic_best_ask] = -1 * synthetic_ask_volume
         synthetic_order_depth.buy_orders[synthetic_best_bid] = synthetic_bid_volume
@@ -595,6 +649,7 @@ class Trader:
                     synthetic_ask_volume = -1 * synthetic_order_depth.sell_orders[synthetic_ask]
 
                     orderbook_volume = min(best_bid_volume, synthetic_ask_volume)
+
                     execute_volume = min(orderbook_volume, target_quantity)
 
                     orders.append(Order("PICNIC_BASKET1", best_bid, -1 * execute_volume))
@@ -604,9 +659,9 @@ class Trader:
                                                    Order("SYNTHETIC1", synthetic_ask, execute_volume),
                                                     )
 
-                    orders.append(croissants_order)
-                    orders.append(jams_order)
-                    orders.append(djembes_order)
+                    croissants_orders.append(croissants_order)
+                    jams_orders.append(jams_order)
+                    djembes_orders.append(djembes_order)
 
                     sell_order_volume += execute_volume
 
@@ -638,82 +693,82 @@ class Trader:
                     buy_order_volume += execute_volume
 
             # otherwise, do normal take/clear/make
-            else:
-                if len(order_depth.sell_orders) != 0:
-                    # market taking
-                    best_ask = min(order_depth.sell_orders.keys())
-                    best_ask_amount = -1 * order_depth.sell_orders[best_ask]
-
-                    if best_ask <= picnic_fair_value - take_width:
-                        quantity = min(best_ask_amount, limit - position)
-                        if quantity > 0:
-                            orders.append(Order("PICNIC_BASKET1", best_ask, quantity))
-                            buy_order_volume += quantity
-                            # order_depth.sell_orders[best_ask] += quantity
-                            # if order_depth.sell_orders[best_ask] == 0:
-                            #     del order_depth.sell_orders[best_ask]
-
-                if len(order_depth.buy_orders) != 0:
-                    best_bid = max(order_depth.buy_orders.keys())
-                    best_bid_amount = order_depth.buy_orders[best_bid]
-
-                    if best_bid >= picnic_fair_value + take_width:
-                        quantity = min(best_bid_amount, limit + position)
-                        if quantity > 0:
-                            orders.append(Order("PICNIC_BASKET1", best_bid, -1 * quantity))
-                            sell_order_volume += quantity
-                            # order_depth.buy_orders[best_bid] -= quantity
-                            # if order_depth.buy_orders[best_bid] == 0:
-                            #     del order_depth.buy_orders[best_bid]
-
-                # make 0 ev trades to try to get back to 0 position
-                orders, buy_order_volume, sell_order_volume = self.clear_orders(
-                    state,
-                    "PICNIC_BASKET1",
-                    buy_order_volume,
-                    sell_order_volume,
-                    picnic_fair_value,
-                    take_width,
-                    limit,
-                    orders
-                )
-
-                # market making
-                # if prices are at most this much above/below the fair, do not market make
-                disregard_edge = 0
-
-                # if prices are at most this much above/below the fair, join (market make at the same price)
-                join_edge = 1
-                asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > picnic_fair_value + disregard_edge]
-                bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < picnic_fair_value - disregard_edge]
-
-                best_ask_above_fair = min(asks_above_fair) if len(asks_above_fair) > 0 else None
-                best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
-
-                ask = picnic_fair_value + 1
-                if best_ask_above_fair is not None:
-                    # joining criteria
-                    if best_ask_above_fair - picnic_fair_value <= join_edge:
-                        ask = best_ask_above_fair
-                    # pennying criteria (undercutting by the minimum)
-                    else:
-                        ask = best_ask_above_fair - 1
-
-                bid = picnic_fair_value - 1
-                if best_bid_below_fair is not None:
-                    if abs(picnic_fair_value - best_bid_below_fair) <= join_edge:
-                        bid = best_bid_below_fair
-                    else:
-                        bid = best_bid_below_fair + 1
-
-                # how many buy orders we could put out
-                buy_quantity = limit - (position + buy_order_volume)
-                if buy_quantity > 0:
-                    orders.append(Order("PICNIC_BASKET1", round(bid), buy_quantity))
-
-                sell_quantity = limit + (position - sell_order_volume)
-                if sell_quantity > 0:
-                    orders.append(Order("PICNIC_BASKET1", round(ask), -1 * sell_quantity))
+            # else:
+            #     if len(order_depth.sell_orders) != 0:
+            #         # market taking
+            #         best_ask = min(order_depth.sell_orders.keys())
+            #         best_ask_amount = -1 * order_depth.sell_orders[best_ask]
+            #
+            #         if best_ask <= picnic_fair_value - take_width:
+            #             quantity = min(best_ask_amount, limit - position)
+            #             if quantity > 0:
+            #                 orders.append(Order("PICNIC_BASKET1", best_ask, quantity))
+            #                 buy_order_volume += quantity
+            #                 # order_depth.sell_orders[best_ask] += quantity
+            #                 # if order_depth.sell_orders[best_ask] == 0:
+            #                 #     del order_depth.sell_orders[best_ask]
+            #
+            #     if len(order_depth.buy_orders) != 0:
+            #         best_bid = max(order_depth.buy_orders.keys())
+            #         best_bid_amount = order_depth.buy_orders[best_bid]
+            #
+            #         if best_bid >= picnic_fair_value + take_width:
+            #             quantity = min(best_bid_amount, limit + position)
+            #             if quantity > 0:
+            #                 orders.append(Order("PICNIC_BASKET1", best_bid, -1 * quantity))
+            #                 sell_order_volume += quantity
+            #                 # order_depth.buy_orders[best_bid] -= quantity
+            #                 # if order_depth.buy_orders[best_bid] == 0:
+            #                 #     del order_depth.buy_orders[best_bid]
+            #
+            #     # make 0 ev trades to try to get back to 0 position
+            #     orders, buy_order_volume, sell_order_volume = self.clear_orders(
+            #         state,
+            #         "PICNIC_BASKET1",
+            #         buy_order_volume,
+            #         sell_order_volume,
+            #         picnic_fair_value,
+            #         take_width,
+            #         limit,
+            #         orders
+            #     )
+            #
+            #     # market making
+            #     # if prices are at most this much above/below the fair, do not market make
+            #     disregard_edge = 0
+            #
+            #     # if prices are at most this much above/below the fair, join (market make at the same price)
+            #     join_edge = 1
+            #     asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > picnic_fair_value + disregard_edge]
+            #     bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < picnic_fair_value - disregard_edge]
+            #
+            #     best_ask_above_fair = min(asks_above_fair) if len(asks_above_fair) > 0 else None
+            #     best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
+            #
+            #     ask = picnic_fair_value + 1
+            #     if best_ask_above_fair is not None:
+            #         # joining criteria
+            #         if best_ask_above_fair - picnic_fair_value <= join_edge:
+            #             ask = best_ask_above_fair
+            #         # pennying criteria (undercutting by the minimum)
+            #         else:
+            #             ask = best_ask_above_fair - 1
+            #
+            #     bid = picnic_fair_value - 1
+            #     if best_bid_below_fair is not None:
+            #         if abs(picnic_fair_value - best_bid_below_fair) <= join_edge:
+            #             bid = best_bid_below_fair
+            #         else:
+            #             bid = best_bid_below_fair + 1
+            #
+            #     # how many buy orders we could put out
+            #     buy_quantity = limit - (position + buy_order_volume)
+            #     if buy_quantity > 0:
+            #         orders.append(Order("PICNIC_BASKET1", round(bid), buy_quantity))
+            #
+            #     sell_quantity = limit + (position - sell_order_volume)
+            #     if sell_quantity > 0:
+            #         orders.append(Order("PICNIC_BASKET1", round(ask), -1 * sell_quantity))
 
         return orders, croissants_orders, jams_orders, djembes_orders
 
@@ -736,12 +791,15 @@ class Trader:
             croissants_price = max(order_depths["CROISSANTS"].buy_orders.keys())
             jams_price = max(order_depths["JAMS"].buy_orders.keys())
 
+        elif quantity == 0:
+            croissants_price = jams_price = 0
+
         croissants_order = Order("CROISSANTS", croissants_price, quantity * 4)
         jams_order = Order("JAMS", jams_price, quantity * 2)
 
         return croissants_order, jams_order
 
-    # get the order depth of the synthetic1
+    # get the order depth of the synthetic2
     def synthetic2_order_depth(self, state: TradingState):
         order_depths = state.order_depths
         synthetic_order_depth = OrderDepth()
@@ -757,12 +815,24 @@ class Trader:
 
         croissants_ask_volume = -1 * order_depths["CROISSANTS"].sell_orders[croissants_best_ask]
         croissants_bid_volume = order_depths["CROISSANTS"].buy_orders[croissants_best_bid]
+        try:
+            croissants_position = state.position["CROISSANTS"]
+        except:
+            croissants_position = 0
 
         jams_ask_volume = -1 * order_depths["JAMS"].sell_orders[jams_best_ask]
         jams_bid_volume = order_depths["JAMS"].buy_orders[jams_best_bid]
+        try:
+            jams_position = state.position["JAMS"]
+        except:
+            jams_position = 0
 
-        synthetic_ask_volume = min(croissants_ask_volume, jams_ask_volume)
-        synthetic_bid_volume = min(croissants_bid_volume, jams_bid_volume)
+        synthetic_ask_volume = min(int(croissants_ask_volume / 4), int((250 - croissants_position) / 4),
+            int(jams_ask_volume / 2), int((350 - jams_position) / 2),
+            )
+        synthetic_bid_volume = min(int(croissants_bid_volume / 4), int((250 + croissants_position) / 4),
+            int(jams_bid_volume / 2), int((350 + jams_position) / 2),
+            )
 
         synthetic_order_depth.sell_orders[synthetic_best_ask] = -1 * synthetic_ask_volume
         synthetic_order_depth.buy_orders[synthetic_best_bid] = synthetic_bid_volume
@@ -834,8 +904,8 @@ class Trader:
                                                    Order("SYNTHETIC2", synthetic_ask, execute_volume),
                                                     )
 
-                    orders.append(croissants_order)
-                    orders.append(jams_order)
+                    croissants_orders.append(croissants_order)
+                    jams_orders.append(jams_order)
 
                     sell_order_volume += execute_volume
 
@@ -866,84 +936,314 @@ class Trader:
                     buy_order_volume += execute_volume
 
             # otherwise, do normal take/clear/make
-            else:
-                if len(order_depth.sell_orders) != 0:
-                    # market taking
-                    best_ask = min(order_depth.sell_orders.keys())
-                    best_ask_amount = -1 * order_depth.sell_orders[best_ask]
-
-                    if best_ask <= picnic_fair_value - take_width:
-                        quantity = min(best_ask_amount, limit - position)
-                        if quantity > 0:
-                            orders.append(Order("PICNIC_BASKET2", best_ask, quantity))
-                            buy_order_volume += quantity
-                            # order_depth.sell_orders[best_ask] += quantity
-                            # if order_depth.sell_orders[best_ask] == 0:
-                            #     del order_depth.sell_orders[best_ask]
-
-                if len(order_depth.buy_orders) != 0:
-                    best_bid = max(order_depth.buy_orders.keys())
-                    best_bid_amount = order_depth.buy_orders[best_bid]
-
-                    if best_bid >= picnic_fair_value + take_width:
-                        quantity = min(best_bid_amount, limit + position)
-                        if quantity > 0:
-                            orders.append(Order("PICNIC_BASKET2", best_bid, -1 * quantity))
-                            sell_order_volume += quantity
-                            # order_depth.buy_orders[best_bid] -= quantity
-                            # if order_depth.buy_orders[best_bid] == 0:
-                            #     del order_depth.buy_orders[best_bid]
-
-                # make 0 ev trades to try to get back to 0 position
-                orders, buy_order_volume, sell_order_volume = self.clear_orders(
-                    state,
-                    "PICNIC_BASKET2",
-                    buy_order_volume,
-                    sell_order_volume,
-                    picnic_fair_value,
-                    take_width,
-                    limit,
-                    orders
-                )
-
-                # market making
-                # if prices are at most this much above/below the fair, do not market make
-                disregard_edge = 0
-
-                # if prices are at most this much above/below the fair, join (market make at the same price)
-                join_edge = 1
-                asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > picnic_fair_value + disregard_edge]
-                bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < picnic_fair_value - disregard_edge]
-
-                best_ask_above_fair = min(asks_above_fair) if len(asks_above_fair) > 0 else None
-                best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
-
-                ask = picnic_fair_value + 1
-                if best_ask_above_fair is not None:
-                    # joining criteria
-                    if best_ask_above_fair - picnic_fair_value <= join_edge:
-                        ask = best_ask_above_fair
-                    # pennying criteria (undercutting by the minimum)
-                    else:
-                        ask = best_ask_above_fair - 1
-
-                bid = picnic_fair_value - 1
-                if best_bid_below_fair is not None:
-                    if abs(picnic_fair_value - best_bid_below_fair) <= join_edge:
-                        bid = best_bid_below_fair
-                    else:
-                        bid = best_bid_below_fair + 1
-
-                # how many buy orders we could put out
-                buy_quantity = limit - (position + buy_order_volume)
-                if buy_quantity > 0:
-                    orders.append(Order("PICNIC_BASKET2", round(bid), buy_quantity))
-
-                sell_quantity = limit + (position - sell_order_volume)
-                if sell_quantity > 0:
-                    orders.append(Order("PICNIC_BASKET2", round(ask), -1 * sell_quantity))
+            # else:
+            #     if len(order_depth.sell_orders) != 0:
+            #         # market taking
+            #         best_ask = min(order_depth.sell_orders.keys())
+            #         best_ask_amount = -1 * order_depth.sell_orders[best_ask]
+            #
+            #         if best_ask <= picnic_fair_value - take_width:
+            #             quantity = min(best_ask_amount, limit - position)
+            #             if quantity > 0:
+            #                 orders.append(Order("PICNIC_BASKET2", best_ask, quantity))
+            #                 buy_order_volume += quantity
+            #                 # order_depth.sell_orders[best_ask] += quantity
+            #                 # if order_depth.sell_orders[best_ask] == 0:
+            #                 #     del order_depth.sell_orders[best_ask]
+            #
+            #     if len(order_depth.buy_orders) != 0:
+            #         best_bid = max(order_depth.buy_orders.keys())
+            #         best_bid_amount = order_depth.buy_orders[best_bid]
+            #
+            #         if best_bid >= picnic_fair_value + take_width:
+            #             quantity = min(best_bid_amount, limit + position)
+            #             if quantity > 0:
+            #                 orders.append(Order("PICNIC_BASKET2", best_bid, -1 * quantity))
+            #                 sell_order_volume += quantity
+            #                 # order_depth.buy_orders[best_bid] -= quantity
+            #                 # if order_depth.buy_orders[best_bid] == 0:
+            #                 #     del order_depth.buy_orders[best_bid]
+            #
+            #     # make 0 ev trades to try to get back to 0 position
+            #     orders, buy_order_volume, sell_order_volume = self.clear_orders(
+            #         state,
+            #         "PICNIC_BASKET2",
+            #         buy_order_volume,
+            #         sell_order_volume,
+            #         picnic_fair_value,
+            #         take_width,
+            #         limit,
+            #         orders
+            #     )
+            #
+            #     # market making
+            #     # if prices are at most this much above/below the fair, do not market make
+            #     disregard_edge = 0
+            #
+            #     # if prices are at most this much above/below the fair, join (market make at the same price)
+            #     join_edge = 1
+            #     asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > picnic_fair_value + disregard_edge]
+            #     bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < picnic_fair_value - disregard_edge]
+            #
+            #     best_ask_above_fair = min(asks_above_fair) if len(asks_above_fair) > 0 else None
+            #     best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
+            #
+            #     ask = picnic_fair_value + 1
+            #     if best_ask_above_fair is not None:
+            #         # joining criteria
+            #         if best_ask_above_fair - picnic_fair_value <= join_edge:
+            #             ask = best_ask_above_fair
+            #         # pennying criteria (undercutting by the minimum)
+            #         else:
+            #             ask = best_ask_above_fair - 1
+            #
+            #     bid = picnic_fair_value - 1
+            #     if best_bid_below_fair is not None:
+            #         if abs(picnic_fair_value - best_bid_below_fair) <= join_edge:
+            #             bid = best_bid_below_fair
+            #         else:
+            #             bid = best_bid_below_fair + 1
+            #
+            #     # how many buy orders we could put out
+            #     buy_quantity = limit - (position + buy_order_volume)
+            #     if buy_quantity > 0:
+            #         orders.append(Order("PICNIC_BASKET2", round(bid), buy_quantity))
+            #
+            #     sell_quantity = limit + (position - sell_order_volume)
+            #     if sell_quantity > 0:
+            #         orders.append(Order("PICNIC_BASKET2", round(ask), -1 * sell_quantity))
 
         return orders, croissants_orders, jams_orders
+
+    def convert_synthetic3_orders(self, synthetic_order_depth, state: TradingState, synthetic_order):
+        best_bid = max(synthetic_order_depth.buy_orders.keys())
+        best_ask = min(synthetic_order_depth.sell_orders.keys())
+
+        price = synthetic_order.price
+        quantity = synthetic_order.quantity
+
+        order_depths = state.order_depths
+
+        # buying synthetic
+        if quantity > 0:
+            picnic1_price = min(order_depths["PICNIC_BASKET1"].sell_orders.keys())
+            picnic2_price = max(order_depths["PICNIC_BASKET2"].buy_orders.keys())
+
+        # selling synthetic
+        elif quantity < 0:
+            picnic1_price = max(order_depths["PICNIC_BASKET1"].buy_orders.keys())
+            picnic2_price = min(order_depths["PICNIC_BASKET2"].sell_orders.keys())
+
+        elif quantity == 0:
+            picnic1_price = picnic2_price = 0
+
+        picnic1_order = Order("PICNIC_BASKET1", picnic1_price, quantity)
+
+        if quantity >= 0:
+            picnic2_order = Order("PICNIC_BASKET2", picnic2_price, -1 * int(quantity * (3 / 2)))
+        else:
+            picnic2_order = Order("PICNIC_BASKET2", picnic2_price, int(-1 * quantity * (3 / 2)))
+
+        return picnic1_order, picnic2_order
+
+    # get the order depth of the synthetic2
+    def synthetic3_order_depth(self, state: TradingState):
+        order_depths = state.order_depths
+        synthetic_order_depth = OrderDepth()
+
+        picnic1_best_ask = min(order_depths["PICNIC_BASKET1"].sell_orders.keys())
+        picnic1_best_bid = max(order_depths["PICNIC_BASKET1"].buy_orders.keys())
+
+        picnic2_best_ask = min(order_depths["PICNIC_BASKET2"].sell_orders.keys())
+        picnic2_best_bid = max(order_depths["PICNIC_BASKET2"].buy_orders.keys())
+
+        synthetic_best_ask = picnic1_best_ask + int(-1 * picnic2_best_bid * (3 / 2))
+        synthetic_best_bid = picnic1_best_bid - int(picnic2_best_ask * (3 / 2))
+
+        picnic1_ask_volume = -1 * order_depths["PICNIC_BASKET1"].sell_orders[picnic1_best_ask]
+        picnic1_bid_volume = order_depths["PICNIC_BASKET1"].buy_orders[picnic1_best_bid]
+        try:
+            picnic1_position = state.position["PICNIC_BASKET1"]
+        except:
+            picnic1_position = 0
+
+        picnic2_ask_volume = -1 * order_depths["PICNIC_BASKET2"].sell_orders[picnic2_best_ask]
+        picnic2_bid_volume = order_depths["PICNIC_BASKET2"].buy_orders[picnic2_best_bid]
+        try:
+            picnic2_position = state.position["PICNIC_BASKET2"]
+        except:
+            picnic2_position = 0
+
+        synthetic_ask_volume = min(int(picnic1_ask_volume), int(60 - picnic1_position),
+            int(picnic2_bid_volume / (3 / 2)), int((100 + picnic2_position) / (3 / 2)),
+            )
+        synthetic_bid_volume = min(int(picnic1_bid_volume), int(60 + picnic1_position),
+            int(picnic2_ask_volume / (3 / 2)), int((100 - picnic2_position) / (3 / 2)),
+            )
+
+        synthetic_order_depth.sell_orders[synthetic_best_ask] = -1 * synthetic_ask_volume
+        synthetic_order_depth.buy_orders[synthetic_best_bid] = synthetic_bid_volume
+
+        return synthetic_order_depth
+
+    def djembes_strategy(self, state: TradingState, limit: int, stored_data):
+        orders: List[Order] = []
+        picnic1_orders: List[Order] = []
+        picnic2_orders: List[Order] = []
+
+        order_depth = state.order_depths["DJEMBES"]
+        position = state.position["DJEMBES"] if "DJEMBES" in state.position else 0
+
+        # fair value calculation: it seems that the fair is the mid-price of the highest ask and lowest bid
+        mm_ask = max(order_depth.sell_orders.keys())
+        mm_bid = min(order_depth.buy_orders.keys())
+
+        # we have a package of 2 djembes
+        djembes_fair_value = (mm_ask + mm_bid) / 2
+
+        # "fair" value for synthetic
+        synthetic_order_depth = self.synthetic3_order_depth(state)
+
+        synthetic_ask = max(synthetic_order_depth.sell_orders.keys())
+        synthetic_bid = min(synthetic_order_depth.buy_orders.keys())
+
+        synthetic_fair_value = (synthetic_ask + synthetic_bid) / 2
+
+        take_width = 1
+        buy_order_volume = 0
+        sell_order_volume = 0
+
+        # z score for spread based on rolling window
+        z_trade = True
+        window = 30
+        z_score_threshold = 30
+
+        spread = djembes_fair_value - synthetic_fair_value
+
+        stored_data["DJEMBES"]["spread_history"].append(spread)
+
+        if len(stored_data["DJEMBES"]["spread_history"]) < 5:
+            z_trade = False
+        elif len(stored_data["DJEMBES"]["spread_history"]) > window:
+            stored_data["DJEMBES"]["spread_history"].pop(0)
+
+        if z_trade:
+            spread_std = np.std(stored_data["DJEMBES"]["spread_history"])
+
+            z_score = (spread + 3.389) / spread_std
+
+            logger.print(z_score)
+            # if we are much higher, then djembes is overvalued and we should sell djembes, buy synthetic
+            if z_score > z_score_threshold:
+                if position > -1 * limit:
+                    target_quantity = position + limit
+                    best_bid = max(order_depth.buy_orders.keys())
+                    best_bid_volume = order_depth.buy_orders[best_bid]
+
+                    synthetic_ask_volume = -1 * synthetic_order_depth.sell_orders[synthetic_ask]
+
+                    orderbook_volume = min(best_bid_volume, synthetic_ask_volume)
+                    execute_volume = min(orderbook_volume, target_quantity)
+
+                    orders.append(Order("DJEMBES", best_bid, -1 * execute_volume))
+
+                    picnic1_order, picnic2_order = self.convert_synthetic3_orders(synthetic_order_depth,
+                                                   state,
+                                                   Order("SYNTHETIC3", synthetic_ask, execute_volume),
+                                                    )
+
+                    picnic1_orders.append(picnic1_order)
+                    picnic2_orders.append(picnic2_order)
+
+                    sell_order_volume += execute_volume
+
+            # z score too low, picnic undervalued, buy picnic, sell synthetic
+            elif z_score < -1 * z_score_threshold:
+                if position < limit:
+                    target_quantity = limit - position
+                    best_ask = min(order_depth.sell_orders.keys())
+                    best_ask_volume = -1 * order_depth.sell_orders[best_ask]
+
+                    synthetic_bid_volume = synthetic_order_depth.buy_orders[synthetic_bid]
+
+                    orderbook_volume = min(best_ask_volume, synthetic_bid_volume)
+                    execute_volume = min(orderbook_volume, target_quantity)
+
+                    orders.append(Order("DJEMBES", best_ask, execute_volume))
+
+                    picnic1_order, picnic2_order = self.convert_synthetic3_orders(synthetic_order_depth,
+                                                                                                 state,
+                                                                                                 Order("SYNTHETIC3",
+                                                                                                       synthetic_bid,
+                                                                                                       -1 * execute_volume),
+                                                                                                 )
+
+                    picnic1_orders.append(picnic1_order)
+                    picnic2_orders.append(picnic2_order)
+
+                    buy_order_volume += execute_volume
+
+        return orders, picnic1_orders, picnic2_orders
+
+    def spread_picker(self, state: TradingState):
+        picnic1_order_depth = state.order_depths["PICNIC_BASKET1"]
+        mm_ask = max(picnic1_order_depth.sell_orders.keys())
+        mm_bid = min(picnic1_order_depth.buy_orders.keys())
+        picnic1_fair_value = (mm_ask + mm_bid) / 2
+
+        synthetic1_order_depth = self.synthetic1_order_depth(state)
+        synthetic1_ask = max(synthetic1_order_depth.sell_orders.keys())
+        synthetic1_bid = min(synthetic1_order_depth.buy_orders.keys())
+        synthetic1_fair_value = (synthetic1_ask + synthetic1_bid) / 2
+
+        spread1 = picnic1_fair_value - synthetic1_fair_value - 48.745
+
+        picnic2_order_depth = state.order_depths["PICNIC_BASKET2"]
+        mm_ask = max(picnic2_order_depth.sell_orders.keys())
+        mm_bid = min(picnic2_order_depth.buy_orders.keys())
+        picnic2_fair_value = (mm_ask + mm_bid) / 2
+
+        synthetic2_order_depth = self.synthetic2_order_depth(state)
+        synthetic2_ask = max(synthetic2_order_depth.sell_orders.keys())
+        synthetic2_bid = min(synthetic2_order_depth.buy_orders.keys())
+        synthetic2_fair_value = (synthetic2_ask + synthetic2_bid) / 2
+
+        spread2 = picnic2_fair_value - synthetic2_fair_value - 30.237
+
+        djembes_order_depth = state.order_depths["DJEMBES"]
+        mm_ask = max(djembes_order_depth.sell_orders.keys())
+        mm_bid = min(djembes_order_depth.buy_orders.keys())
+        djembes_fair_value = (mm_ask + mm_bid) / 2
+
+        synthetic3_order_depth = self.synthetic3_order_depth(state)
+        synthetic3_ask = max(synthetic3_order_depth.sell_orders.keys())
+        synthetic3_bid = min(synthetic3_order_depth.buy_orders.keys())
+        synthetic3_fair_value = (synthetic3_ask + synthetic3_bid) / 2
+
+        spread3 = djembes_fair_value - synthetic3_fair_value + 3.389
+
+        if abs(spread1) == max(abs(spread1), abs(spread2), abs(spread3)):
+            best = "PICNIC_BASKET1"
+        elif abs(spread2) == max(abs(spread1), abs(spread2), abs(spread3)):
+            best = "PICNIC_BASKET2"
+        else:
+            best = "DJEMBES"
+
+        if abs(spread1) == statistics.median([abs(spread1), abs(spread2), abs(spread3)]):
+            mid = "PICNIC_BASKET1"
+        elif abs(spread2) == statistics.median([abs(spread1), abs(spread2), abs(spread3)]):
+            mid = "PICNIC_BASKET2"
+        else:
+            mid = "DJEMBES"
+
+        if abs(spread1) == min(abs(spread1), abs(spread2), abs(spread3)):
+            worst = "PICNIC_BASKET1"
+        elif abs(spread2) == min(abs(spread1), abs(spread2), abs(spread3)):
+            worst = "PICNIC_BASKET2"
+        else:
+            worst = "DJEMBES"
+
+        return best, mid, worst
 
     def run(self, state: TradingState):
         stored_data = json.loads(state.traderData) if state.traderData else {}
@@ -951,9 +1251,9 @@ class Trader:
         for product in ["RAINFOREST_RESIN",
                         "KELP",
                         "SQUID_INK",
-                        "CROISSANT",
-                        "JAM",
-                        "DJEMBE",
+                        "CROISSANTS",
+                        "JAMS",
+                        "DJEMBES",
                         "PICNIC_BASKET1",
                         "PICNIC_BASKET2",
                         ]:
@@ -990,6 +1290,8 @@ class Trader:
                 result["KELP"] = self.kelp_strategy(state, POSITION_LIMITS["KELP"])
             if product == "SQUID_INK":
                 result["SQUID_INK"] = self.ink_strategy(state, POSITION_LIMITS["SQUID_INK"], stored_data)
+            # if product == "PICNIC_BASKET1":
+            #     best, worst, mid = self.spread_picker(state)
             if product == "PICNIC_BASKET1":
                 orders, croissants_orders, jams_orders, djembes_orders = self.picnic1_strategy(state, POSITION_LIMITS["PICNIC_BASKET1"], stored_data)
                 result["PICNIC_BASKET1"] = orders
@@ -1002,6 +1304,12 @@ class Trader:
                 result["PICNIC_BASKET2"] = orders
                 result["CROISSANTS"] = croissants_orders
                 result["JAMS"] = jams_orders
+            if product == "DJEMBES":
+                orders, picnic1_orders, picnic2_orders = self.djembes_strategy(state, POSITION_LIMITS[
+                    "DJEMBES"], stored_data)
+                result["DJEMBES"] = orders
+                result["PICNIC_BASKET1"] = picnic1_orders
+                result["PICNIC_BASKET2"] = picnic2_orders
 
         trader_data = json.dumps(stored_data, separators=(",", ":"))
 
