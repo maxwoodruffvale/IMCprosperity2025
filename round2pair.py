@@ -227,17 +227,17 @@ class Trader:
 
         # market making
         # if prices are at most this much above/below the fair, do not market make
-        disregard_edge = 1
+        disregard_edge = 0
 
         # if prices are at most this much above/below the fair, join (market make at the same price)
-        join_edge = 2
+        join_edge = 1
         asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > fair_value + disregard_edge]
         bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < fair_value - disregard_edge]
 
         best_ask_above_fair = min(asks_above_fair) if len(asks_above_fair) > 0 else None
         best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
 
-        ask = 10005
+        ask = 10008
         if best_ask_above_fair is not None:
             # joining criteria
             if best_ask_above_fair - fair_value <= join_edge:
@@ -246,7 +246,7 @@ class Trader:
             else:
                 ask = best_ask_above_fair - 1
 
-        bid = 9995
+        bid = 9992
         if best_bid_below_fair is not None:
             if abs(fair_value - best_bid_below_fair) <= join_edge:
                 bid = best_bid_below_fair
@@ -622,7 +622,7 @@ class Trader:
         # z score for spread based on rolling window
         z_trade = True
         window = 30
-        z_score_threshold = 35
+        z_score_threshold = 30
 
         spread = picnic_fair_value - synthetic_fair_value
 
@@ -1284,12 +1284,12 @@ class Trader:
                         "PICNIC_BASKET1",
                         "PICNIC_BASKET2",
                         ]:
-            if product == "RAINFOREST_RESIN":
-                result["RAINFOREST_RESIN"] = self.resin_strategy(state, POSITION_LIMITS["RAINFOREST_RESIN"])
-            if product == "KELP":
-                result["KELP"] = self.kelp_strategy(state, POSITION_LIMITS["KELP"])
-            if product == "SQUID_INK":
-                result["SQUID_INK"] = self.ink_strategy(state, POSITION_LIMITS["SQUID_INK"], stored_data)
+            # if product == "RAINFOREST_RESIN":
+            #     result["RAINFOREST_RESIN"] = self.resin_strategy(state, POSITION_LIMITS["RAINFOREST_RESIN"])
+            # if product == "KELP":
+            #     result["KELP"] = self.kelp_strategy(state, POSITION_LIMITS["KELP"])
+            # if product == "SQUID_INK":
+            #     result["SQUID_INK"] = self.ink_strategy(state, POSITION_LIMITS["SQUID_INK"], stored_data)
             # if product == "PICNIC_BASKET1":
             #     best, worst, mid = self.spread_picker(state)
             if product == "PICNIC_BASKET1":
