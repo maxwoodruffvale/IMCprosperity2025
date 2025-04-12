@@ -984,18 +984,18 @@ class Trader:
                         "PICNIC_BASKET1",
                         "PICNIC_BASKET2",
                         ]:
-            # if product == "RAINFOREST_RESIN":
-            #     result["RAINFOREST_RESIN"] = self.resin_strategy(state, POSITION_LIMITS["RAINFOREST_RESIN"])
-            # if product == "KELP":
-            #     result["KELP"] = self.kelp_strategy(state, POSITION_LIMITS["KELP"])
-            # if product == "SQUID_INK":
-            #     result["SQUID_INK"] = self.ink_strategy(state, POSITION_LIMITS["SQUID_INK"], stored_data)
-            # if product == "PICNIC_BASKET1":
-            #     orders, croissants_orders, jams_orders, djembes_orders = self.picnic1_strategy(state, POSITION_LIMITS["PICNIC_BASKET1"], stored_data)
-            #     result["PICNIC_BASKET1"] = orders
-            #     result["CROISSANTS"] = croissants_orders
-            #     result["JAMS"] = jams_orders
-            #     result["DJEMBES"] = djembes_orders
+            if product == "RAINFOREST_RESIN":
+                result["RAINFOREST_RESIN"] = self.resin_strategy(state, POSITION_LIMITS["RAINFOREST_RESIN"])
+            if product == "KELP":
+                result["KELP"] = self.kelp_strategy(state, POSITION_LIMITS["KELP"])
+            if product == "SQUID_INK":
+                result["SQUID_INK"] = self.ink_strategy(state, POSITION_LIMITS["SQUID_INK"], stored_data)
+            if product == "PICNIC_BASKET1":
+                orders, croissants_orders, jams_orders, djembes_orders = self.picnic1_strategy(state, POSITION_LIMITS["PICNIC_BASKET1"], stored_data)
+                result["PICNIC_BASKET1"] = orders
+                result["CROISSANTS"] = croissants_orders
+                result["JAMS"] = jams_orders
+                result["DJEMBES"] = djembes_orders
             if product == "PICNIC_BASKET2":
                 orders, croissants_orders, jams_orders = self.picnic2_strategy(state, POSITION_LIMITS[
                     "PICNIC_BASKET2"], stored_data)
