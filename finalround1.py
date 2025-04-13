@@ -447,6 +447,74 @@ class Trader:
             orders.append(Order("KELP", round(ask), -1 * sell_quantity))
 
         return orders
+    # def ink(self, state: TradingState, limit: int, stored_data):
+    #     orders: List[Order] = []
+
+    #     order_depth = state.order_depths["SQUID_INK"]
+    #     position = state.position["SQUID_INK"] if "SQUID_INK" in state.position else 0
+
+    #     buy_order_volume = 0
+    #     sell_order_volume = 0
+
+    #     # fair value calculation: it seems that the fair is the mid-price of the highest ask and lowest bid
+    #     mm_ask = max(order_depth.sell_orders.keys())
+    #     mm_bid = min(order_depth.buy_orders.keys())
+
+    #     fair_value = (mm_ask + mm_bid) / 2
+    #     take_width = 0.3
+
+    #     # swing based on z score of rolling avg of returns
+    #     # if above certain amount, sell since mean reversion, if below buy
+    #     window = 110
+    #     z_score_small = 2
+    #     z_score_large = 4
+
+    #     stored_data["SQUID_INK"]["prices"].append(fair_value)
+    #     price_history = stored_data["SQUID_INK"]["prices"]
+    #     if len(price_history) < 5:
+    #         return orders
+    #     if len(stored_data["SQUID_INK"]["prices"]) > window:
+    #         ar_window = 5
+    #         ar_component = sum(price_history[-ar_window:]) / ar_window
+    #         diff = price_history[-1] - price_history[-2] if len(price_history) > 1 else 0
+    #         ma_window = 3
+    #         ma_component = sum(price_history[-i] - price_history[-i-1] for i in range(1, ma_window+1)) / ma_window if len(price_history) >= ma_window + 1 else 0
+    #         stored_data["SQUID_INK"]["prices"].pop(0)
+
+    #     mean_price = np.average(stored_data["SQUID_INK"]["prices"])
+
+    #     std_price = np.std(stored_data["SQUID_INK"]["prices"])
+
+    #     z_score = (fair_value - mean_price) / std_price
+
+    #     # if above certain amount, sell due to mean reversion
+    #     if z_score > z_score_threshold:
+    #         best_bid = max(order_depth.buy_orders.keys())
+    #         best_bid_amount = order_depth.buy_orders[best_bid]
+
+    #         if best_bid >= fair_value + take_width:
+    #             quantity = min(best_bid_amount, limit + position)
+    #             if quantity > 0:
+    #                 orders.append(Order("SQUID_INK", best_bid, -1 * quantity))
+    #                 sell_order_volume += quantity
+
+    #                 order_depth.buy_orders[best_bid] -= quantity
+    #                 if order_depth.buy_orders[best_bid] == 0:
+    #                     del order_depth.buy_orders[best_bid]
+
+    #     if z_score < -z_score_threshold:
+    #         best_ask = min(order_depth.sell_orders.keys())
+    #         best_ask_amount = -1 * order_depth.sell_orders[best_ask]
+
+    #         if best_ask <= fair_value - take_width:
+    #             quantity = min(best_ask_amount, limit - position)
+    #             if quantity > 0:
+    #                 orders.append(Order("SQUID_INK", best_ask, quantity))
+    #                 buy_order_volume += quantity
+
+    #                 order_depth.sell_orders[best_ask] += quantity
+    #                 if order_depth.sell_orders[best_ask] == 0:
+    #                     del order_depth.sell_orders[best_ask]
 
     def ink(self, state: TradingState, limit: int, stored_data):
         orders: List[Order] = []
@@ -456,82 +524,162 @@ class Trader:
 
         if not order_depth.sell_orders or not order_depth.buy_orders:
             return []
-
+        mm_ask = max(order_depth.sell_orders)
+        mm_bid = min(order_depth.buy_orders)
         best_ask = min(order_depth.sell_orders)
         best_bid = max(order_depth.buy_orders)
-        current_mid = (best_ask + best_bid) / 2
+        current_mid = (mm_ask + mm_bid) / 2
 
-        # === Historical Price Update ===
+    #     # === Historical Price Update ===
+    #     if "price_history" not in stored_data[product]:
+    #         stored_data[product]["price_history"] = []
+    #     price_history = stored_data[product]["price_history"]
+    #     price_history.append(current_mid)
+    #     if len(price_history) > 100:
+    #         price_history.pop(0)
+
+    #     # === Predictive Fair Value ===
+    #     predicted_price = current_mid
+    #     if len(price_history) >= 20:
+    #         ar_window = 5
+    #         ar_component = sum(price_history[-ar_window:]) / ar_window
+    #         diff = price_history[-1] - price_history[-2] if len(price_history) > 1 else 0
+    #         ma_window = 3
+    #         ma_component = sum(price_history[-i] - price_history[-i-1] for i in range(1, ma_window+1)) / ma_window if len(price_history) >= ma_window + 1 else 0
+    #         predicted_price = 0.55 * ar_component + 0.25 * (price_history[-1] + diff) + 0.2 * (price_history[-1] + ma_component)
+
+    #     fair_value = 0.7 * predicted_price + 0.3 * current_mid
+
+    #     # === Volatility-Adaptive Spread ===
+    #     price_std = np.std(price_history[-10:]) if len(price_history) >= 10 else 0
+    #     take_width = max(1, min(3, round(price_std * 0.67)))
+    #     spread = max(1, take_width * 2)
+
+    #     # === Position-Aware Skew ===
+    #     skew = -min(2, position / 10) if position > 0 else min(2, -position / 10)
+
+    #     # === Market Taking ===
+    #     buy_order_volume = 0
+    #     sell_order_volume = 0
+
+    #     if best_ask <= fair_value - take_width:
+    #         quantity = min(-order_depth.sell_orders[best_ask], limit - position)
+    #         if quantity > 0:
+    #             orders.append(Order(product, best_ask, quantity))
+    #             buy_order_volume += quantity
+
+    #     if best_bid >= fair_value + take_width:
+    #         quantity = min(order_depth.buy_orders[best_bid], limit + position)
+    #         if quantity > 0:
+    #             orders.append(Order(product, best_bid, -quantity))
+    #             sell_order_volume += quantity
+
+    #     # === Market Making with Predicted Price Anchoring ===
+    #     disregard_edge = 1
+    #     join_edge = 2
+
+    #     asks_above_pred = [p for p in order_depth.sell_orders if p > .5*predicted_price + .5*fair_value + disregard_edge]
+    #     bids_below_pred = [p for p in order_depth.buy_orders if p < .5*predicted_price + .5*fair_value - disregard_edge]
+
+    #     best_ask_above = min(asks_above_pred) if asks_above_pred else None
+    #     best_bid_below = max(bids_below_pred) if bids_below_pred else None
+
+    #     ask = round(predicted_price + spread + skew)
+    #     if best_ask_above is not None:
+    #         ask = best_ask_above if best_ask_above - predicted_price <= join_edge else best_ask_above - 1
+
+    #     bid = round(predicted_price - spread + skew)
+    #     if best_bid_below is not None:
+    #         bid = best_bid_below if abs(predicted_price - best_bid_below) <= join_edge else best_bid_below + 1
+
+    #     remaining_buy = limit - (position + buy_order_volume)
+    #     remaining_sell = limit + (position - sell_order_volume)
+
+    #     if remaining_buy > 0:
+    #         if buy_order_volume > 4:
+    #             orders.append(Order(product, best_ask, remaining_buy))
+    #         else:
+    #             orders.append(Order(product, bid, remaining_buy))
+    #     if remaining_sell > 0:
+    #         if sell_order_volume > 4:
+    #             orders.append(Order(product, best_bid, -remaining_sell))
+    #         else:
+    #             orders.append(Order(product, ask, -remaining_sell))
+
+    #     return orders
+
+     # === 1) Historical Price Storage ===
+        buy_order_volume = 0
+        sell_order_volume = 0
         if "price_history" not in stored_data[product]:
             stored_data[product]["price_history"] = []
         price_history = stored_data[product]["price_history"]
+
         price_history.append(current_mid)
         if len(price_history) > 100:
             price_history.pop(0)
-
-        # === Predictive Fair Value ===
-        predicted_price = current_mid
-        if len(price_history) >= 20:
-            ar_window = 5
-            ar_component = sum(price_history[-ar_window:]) / ar_window
-            diff = price_history[-1] - price_history[-2] if len(price_history) > 1 else 0
-            ma_window = 3
-            ma_component = sum(price_history[-i] - price_history[-i-1] for i in range(1, ma_window+1)) / ma_window if len(price_history) >= ma_window + 1 else 0
-            predicted_price = 0.6 * ar_component + 0.2 * (price_history[-1] + diff) + 0.2 * (price_history[-1] + ma_component)
-
-        fair_value = 0.7 * predicted_price + 0.3 * current_mid
-
-        # === Volatility-Adaptive Spread ===
-        price_std = np.std(price_history[-10:]) if len(price_history) >= 10 else 0
-        take_width = max(1, min(3, round(price_std * 0.67)))
-        spread = max(1, take_width * 2)
-
-        # === Position-Aware Skew ===
-        skew = -min(2, position / 10) if position > 0 else min(2, -position / 10)
-
-        # === Market Taking ===
-        buy_order_volume = 0
-        sell_order_volume = 0
-
-        if best_ask <= fair_value - take_width:
-            quantity = min(-order_depth.sell_orders[best_ask], limit - position)
-            if quantity > 0:
-                orders.append(Order(product, best_ask, quantity))
-                buy_order_volume += quantity
-
-        if best_bid >= fair_value + take_width:
-            quantity = min(order_depth.buy_orders[best_bid], limit + position)
-            if quantity > 0:
-                orders.append(Order(product, best_bid, -quantity))
-                sell_order_volume += quantity
-
-        # === Market Making with Predicted Price Anchoring ===
-        disregard_edge = 1
-        join_edge = 2
-
-        asks_above_pred = [p for p in order_depth.sell_orders if p > predicted_price + disregard_edge]
-        bids_below_pred = [p for p in order_depth.buy_orders if p < predicted_price - disregard_edge]
-
-        best_ask_above = min(asks_above_pred) if asks_above_pred else None
-        best_bid_below = max(bids_below_pred) if bids_below_pred else None
-
-        ask = round(predicted_price + spread + skew)
-        if best_ask_above is not None:
-            ask = best_ask_above if best_ask_above - predicted_price <= join_edge else best_ask_above - 1
-
-        bid = round(predicted_price - spread + skew)
-        if best_bid_below is not None:
-            bid = best_bid_below if abs(predicted_price - best_bid_below) <= join_edge else best_bid_below + 1
-
-        remaining_buy = limit - (position + buy_order_volume)
-        remaining_sell = limit + (position - sell_order_volume)
-
-        if remaining_buy > 0:
-            orders.append(Order(product, bid, remaining_buy))
-        if remaining_sell > 0:
-            orders.append(Order(product, ask, -remaining_sell))
-
+        if len(price_history) < 2:
+            return []
+        # === 2) Predictive Fair Value (optional) ===
+        # (We keep your original logic, but you can change it or remove it.)
+        if current_mid >= price_history[-2] + 25:
+            best_bid_amount = order_depth.buy_orders[best_bid]
+            qty = min(limit-position, best_bid_amount)
+            if qty > 0:
+                orders.append(Order(product, best_bid, limit+position))
+                sell_order_volume += qty
+        elif current_mid <= price_history[-2] - 25:
+            best_ask_amount = -order_depth.sell_orders[best_ask]
+            qty = min(limit-position, best_ask_amount)
+            if qty > 0:
+                orders.append(Order(product, best_ask, limit-position))
+                buy_order_volume += qty
         return orders
+
+
+
+
+        # # === 6) If the best ask is below fair_value - take_width, BUY ===
+        # # If also below the lower_extreme, we buy bigger (extreme_size)
+        # remaining_buy = limit - position  # how many we can still buy
+        # if remaining_buy > 0:
+        #     if best_ask <= fair_value - take_width:
+        #         # Normal or extreme?
+        #         if best_ask < lower_extreme:
+        #             # EXTREME -> buy bigger
+        #             quantity = min(extreme_size, remaining_buy, -order_depth.sell_orders[best_ask])
+        #         else:
+        #             # normal
+        #             quantity = min(normal_size, remaining_buy, -order_depth.sell_orders[best_ask])
+        #         if quantity > 0:
+        #             orders.append(Order(product, best_ask, quantity))
+        #             buy_order_volume += quantity
+
+        # === 7) If the best bid is above fair_value + take_width, SELL ===
+        # If also above the upper_extreme, we sell bigger (extreme_size)
+        # remaining_sell = limit + position  # how many we can still sell
+        # if remaining_sell > 0:
+        #     if best_bid >= fair_value + take_width:
+        #         if best_bid > upper_extreme:
+        #             # EXTREME -> sell bigger
+        #             quantity = min(extreme_size, remaining_sell, order_depth.buy_orders[best_bid])
+        #         else:
+        #             # normal
+        #             quantity = min(normal_size, remaining_sell, order_depth.buy_orders[best_bid])
+        #         if quantity > 0:
+        #             orders.append(Order(product, best_bid, -quantity))
+        #             sell_order_volume += quantity
+        # remaining_buy = limit - (position + buy_order_volume)
+        # remaining_sell = limit + (position - sell_order_volume)
+
+        # if remaining_buy > 0:
+        #     if buy_order_volume > 4:
+        #         orders.append(Order(product, best_ask, remaining_buy))
+        # if remaining_sell > 0:
+        #     if sell_order_volume > 4:
+        #         orders.append(Order(product, best_bid, -remaining_sell))
+
+        # return orders
     
     def run(self, state: TradingState):
         stored_data = json.loads(state.traderData) if state.traderData else {}
