@@ -11,3 +11,12 @@ __pycache__/squid_ink_strategy.cpython-312.pyc
 __pycache__/template.cpython-312.pyc
 __pycache__/tester.cpython-312.pyc
 __pycache__/tutorialfinal.cpython-312.pyc
+/island-data-bottle-round-1/
+./island-data-bottle-round-3/
+/2025_data_bottle/
+/2024_data_bottle/
+/2023_data_bottle/
+
+.gitignore
+control.csv
+submissions/2025-04-10_00-10-57.log
