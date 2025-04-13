@@ -196,9 +196,9 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("RAINFOREST_RESIN", best_ask, quantity))
                     buy_order_volume += quantity
-                    # order_depth.sell_orders[best_ask] += quantity
-                    # if order_depth.sell_orders[best_ask] == 0:
-                    #     del order_depth.sell_orders[best_ask]
+                    order_depth.sell_orders[best_ask] += quantity
+                    if order_depth.sell_orders[best_ask] == 0:
+                        del order_depth.sell_orders[best_ask]
 
         if len(order_depth.buy_orders) != 0:
             best_bid = max(order_depth.buy_orders.keys())
@@ -209,9 +209,9 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("RAINFOREST_RESIN", best_bid, -1 * quantity))
                     sell_order_volume += quantity
-                    # order_depth.buy_orders[best_bid] -= quantity
-                    # if order_depth.buy_orders[best_bid] == 0:
-                    #     del order_depth.buy_orders[best_bid]
+                    order_depth.buy_orders[best_bid] -= quantity
+                    if order_depth.buy_orders[best_bid] == 0:
+                        del order_depth.buy_orders[best_bid]
 
         # make 0 ev trades to try to get back to 0 position
         orders, buy_order_volume, sell_order_volume = self.clear_orders(
@@ -293,9 +293,9 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("KELP", best_ask, quantity))
                     buy_order_volume += quantity
-                    # order_depth.sell_orders[best_ask] += quantity
-                    # if order_depth.sell_orders[best_ask] == 0:
-                    #     del order_depth.sell_orders[best_ask]
+                    order_depth.sell_orders[best_ask] += quantity
+                    if order_depth.sell_orders[best_ask] == 0:
+                        del order_depth.sell_orders[best_ask]
 
         if len(order_depth.buy_orders) != 0:
             best_bid = max(order_depth.buy_orders.keys())
@@ -306,9 +306,9 @@ class Trader:
                 if quantity > 0:
                     orders.append(Order("KELP", best_bid, -1 * quantity))
                     sell_order_volume += quantity
-                    # order_depth.buy_orders[best_bid] -= quantity
-                    # if order_depth.buy_orders[best_bid] == 0:
-                    #     del order_depth.buy_orders[best_bid]
+                    order_depth.buy_orders[best_bid] -= quantity
+                    if order_depth.buy_orders[best_bid] == 0:
+                        del order_depth.buy_orders[best_bid]
 
         # make 0 ev trades to try to get back to 0 position
         orders, buy_order_volume, sell_order_volume = self.clear_orders(
@@ -376,12 +376,12 @@ class Trader:
         mm_bid = min(order_depth.buy_orders.keys())
 
         fair_value = (mm_ask + mm_bid) / 2
-        take_width = 0.3
+        take_width = 0.5
 
         # swing based on z score of rolling avg of returns
         # if above certain amount, sell since mean reversion, if below buy
         window = 50
-        z_score_threshold = 2
+        z_score_threshold = 0.5
 
         stored_data["SQUID_INK"]["spread_history"].append(fair_value)
 
@@ -407,9 +407,9 @@ class Trader:
                     orders.append(Order("SQUID_INK", best_bid, -1 * quantity))
                     sell_order_volume += quantity
 
-                    # order_depth.buy_orders[best_bid] -= quantity
-                    # if order_depth.buy_orders[best_bid] == 0:
-                    #     del order_depth.buy_orders[best_bid]
+                    order_depth.buy_orders[best_bid] -= quantity
+                    if order_depth.buy_orders[best_bid] == 0:
+                        del order_depth.buy_orders[best_bid]
 
         if z_score < -z_score_threshold:
             best_ask = min(order_depth.sell_orders.keys())
@@ -421,9 +421,9 @@ class Trader:
                     orders.append(Order("SQUID_INK", best_ask, quantity))
                     buy_order_volume += quantity
 
-                    # order_depth.sell_orders[best_ask] += quantity
-                    # if order_depth.sell_orders[best_ask] == 0:
-                    #     del order_depth.sell_orders[best_ask]
+                    order_depth.sell_orders[best_ask] += quantity
+                    if order_depth.sell_orders[best_ask] == 0:
+                        del order_depth.sell_orders[best_ask]
 
         # else:
         #     best_ask = min(order_depth.sell_orders.keys())
@@ -451,54 +451,54 @@ class Trader:
         #             #     del order_depth.buy_orders[best_bid]
 
         # make 0 ev trades to try to get back to 0 position
-        orders, buy_order_volume, sell_order_volume = self.clear_orders(
-            state,
-            "SQUID_INK",
-            buy_order_volume,
-            sell_order_volume,
-            fair_value,
-            take_width,
-            limit,
-            orders
-        )
+        # orders, buy_order_volume, sell_order_volume = self.clear_orders(
+        #     state,
+        #     "SQUID_INK",
+        #     buy_order_volume,
+        #     sell_order_volume,
+        #     fair_value,
+        #     take_width,
+        #     limit,
+        #     orders
+        # )
 
-        # market making
-        # if prices are at most this much above/below the fair, do not market make
-        disregard_edge = 1
-
-        # if prices are at most this much above/below the fair, join (market make at the same price)
-        join_edge = 2
-
-        asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > fair_value + disregard_edge]
-        bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < fair_value - disregard_edge]
-
-        best_ask_above_fair = min(asks_above_fair) if len(asks_above_fair) > 0 else None
-        best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
-
-        ask = fair_value + 1
-        if best_ask_above_fair != None:
-            # joining criteria
-            if best_ask_above_fair - fair_value <= join_edge:
-                ask = best_ask_above_fair
-            # pennying criteria (undercutting by the minimum)
-            else:
-                ask = best_ask_above_fair - 1
-
-        bid = fair_value - 1
-        if best_bid_below_fair != None:
-            if abs(fair_value - best_bid_below_fair) <= join_edge:
-                bid = best_bid_below_fair
-            else:
-                bid = best_bid_below_fair + 1
-
-        # how many buy orders we could put out
-        buy_quantity = limit - (position + buy_order_volume)
-        if buy_quantity > 0:
-            orders.append(Order("SQUID_INK", round(bid), buy_quantity))
-
-        sell_quantity = limit + (position - sell_order_volume)
-        if sell_quantity > 0:
-            orders.append(Order("SQUID_INK", round(ask), -1 * sell_quantity))
+        # # market making
+        # # if prices are at most this much above/below the fair, do not market make
+        # disregard_edge = 1
+        #
+        # # if prices are at most this much above/below the fair, join (market make at the same price)
+        # join_edge = 2
+        #
+        # asks_above_fair = [price for price in order_depth.sell_orders.keys() if price > fair_value + disregard_edge]
+        # bids_below_fair = [price for price in order_depth.buy_orders.keys() if price < fair_value - disregard_edge]
+        #
+        # best_ask_above_fair = min(asks_above_fair) if len(asks_above_fair) > 0 else None
+        # best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
+        #
+        # ask = fair_value + 1
+        # if best_ask_above_fair != None:
+        #     # joining criteria
+        #     if best_ask_above_fair - fair_value <= join_edge:
+        #         ask = best_ask_above_fair
+        #     # pennying criteria (undercutting by the minimum)
+        #     else:
+        #         ask = best_ask_above_fair - 1
+        #
+        # bid = fair_value - 1
+        # if best_bid_below_fair != None:
+        #     if abs(fair_value - best_bid_below_fair) <= join_edge:
+        #         bid = best_bid_below_fair
+        #     else:
+        #         bid = best_bid_below_fair + 1
+        #
+        # # how many buy orders we could put out
+        # buy_quantity = limit - (position + buy_order_volume)
+        # if buy_quantity > 0:
+        #     orders.append(Order("SQUID_INK", round(bid), buy_quantity))
+        #
+        # sell_quantity = limit + (position - sell_order_volume)
+        # if sell_quantity > 0:
+        #     orders.append(Order("SQUID_INK", round(ask), -1 * sell_quantity))
 
         return orders
 
@@ -553,8 +553,6 @@ class Trader:
         except:
             croissants_position = 0
 
-        logger.print(f"Croissants Position is {croissants_position}")
-
         jams_ask_volume = -1 * order_depths["JAMS"].sell_orders[jams_best_ask]
         jams_bid_volume = order_depths["JAMS"].buy_orders[jams_best_bid]
         try:
@@ -562,16 +560,12 @@ class Trader:
         except:
             jams_position = 0
 
-        logger.print(f"Jams Position is {jams_position}")
-
         djembes_ask_volume = -1 * order_depths["DJEMBES"].sell_orders[djembes_best_ask]
         djembes_bid_volume = order_depths["DJEMBES"].buy_orders[djembes_best_bid]
         try:
             djembes_position = state.position["DJEMBES"]
         except:
             djembes_position = 0
-
-        logger.print(f"Djembes Position is {djembes_position}")
 
         synthetic_ask_volume = min(int(croissants_ask_volume / 6), int((250 - croissants_position) / 6),
                                    int(jams_ask_volume / 3), int((350 - jams_position) / 3),
@@ -581,8 +575,6 @@ class Trader:
                                    int(jams_bid_volume / 3), int((350 + jams_position) / 3),
                                    int(djembes_bid_volume), int(60 + djembes_position),
                                    )
-
-        logger.print(f"Synthetic Ask/Bid Vol is {synthetic_ask_volume}, {synthetic_bid_volume}")
 
         synthetic_order_depth.sell_orders[synthetic_best_ask] = -1 * synthetic_ask_volume
         synthetic_order_depth.buy_orders[synthetic_best_bid] = synthetic_bid_volume
@@ -633,9 +625,11 @@ class Trader:
         if z_trade:
             spread_std = np.std(stored_data["PICNIC_BASKET1"]["spread_history"])
 
-            z_score = (spread - 48.745) / spread_std
+            if spread_std == 0:
+                z_score = float("inf")
+            else:
+                z_score = (spread - 48.745) / spread_std
 
-            logger.print(z_score)
             # if we are much higher, then picnic is overvalued and we should sell picnic, buy synthetic
             if z_score > z_score_threshold:
                 if position > -1 * limit:
@@ -914,9 +908,11 @@ class Trader:
         if z_trade:
             spread_std = np.std(stored_data["PICNIC_BASKET2"]["spread_history"])
 
-            z_score = (spread - 30.237) / spread_std
+            if spread_std == 0:
+                z_score = float("inf")
+            else:
+                z_score = (spread - 30.237) / spread_std
 
-            logger.print(z_score)
             # if we are much higher, then picnic is overvalued and we should sell picnic, buy synthetic
             if z_score > z_score_threshold:
                 if position > -1 * limit:
@@ -1189,9 +1185,11 @@ class Trader:
         if z_trade:
             spread_std = np.std(stored_data["DJEMBES"]["spread_history"])
 
-            z_score = (spread + 3.389) / spread_std
+            if spread_std == 0:
+                z_score = float("inf")
+            else:
+                z_score = (spread + 3.389) / spread_std
 
-            logger.print(z_score)
             # if we are much higher, then djembes is overvalued and we should sell djembes, buy synthetic
             if z_score > z_score_threshold:
                 if position > -1 * limit:
