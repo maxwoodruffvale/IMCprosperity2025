@@ -590,8 +590,6 @@ class Trader:
         order_depth = state.order_depths["PICNIC_BASKET1"]
         position = state.position["PICNIC_BASKET1"] if "PICNIC_BASKET1" in state.position else 0
 
-        logger.print(f"picnic1 position {position}")
-
         # fair value calculation: it seems that the fair is the mid-price of the highest ask and lowest bid
         mm_ask = max(order_depth.sell_orders.keys())
         mm_bid = min(order_depth.buy_orders.keys())
@@ -612,12 +610,10 @@ class Trader:
 
         # z score for spread based on rolling window
         z_trade = True
-        window = 30
+        window = 25
         z_score_threshold = 30
 
         spread = picnic_fair_value - synthetic_fair_value
-
-        logger.print(f"spread {spread}")
 
         if first:
             stored_data["PICNIC_BASKET1"]["spread_history"].append(spread)
@@ -635,8 +631,6 @@ class Trader:
             else:
                 z_score = (spread - 48.745) / spread_std
 
-            logger.print(f"z {z_score}")
-
             # if we are much higher, then picnic is overvalued and we should sell picnic, buy synthetic
             if z_score > z_score_threshold:
                 if position > -1 * limit:
@@ -644,14 +638,10 @@ class Trader:
                     best_bid = max(order_depth.buy_orders.keys())
                     best_bid_volume = order_depth.buy_orders[best_bid]
 
-                    logger.print(f"bid/vol {best_bid, best_bid_volume}")
-
                     synthetic_ask_volume = -1 * synthetic_order_depth.sell_orders[synthetic_ask]
 
                     orderbook_volume = min(best_bid_volume, synthetic_ask_volume)
                     execute_volume = min(orderbook_volume, target_quantity)
-
-                    logger.print(f"exec vol {execute_volume}")
 
                     if execute_volume == 0:
                         return orders, croissants_orders, jams_orders, djembes_orders
@@ -671,39 +661,17 @@ class Trader:
                     if order_depth.buy_orders[best_bid] == 0:
                         del order_depth.buy_orders[best_bid]
 
-                    try:
-                        logger.print(f"bid vol {order_depth.buy_orders[best_bid]}")
-                    except:
-                        pass
-
                     state.order_depths["CROISSANTS"].sell_orders[croissants_order.price] += (6 * execute_volume)
                     if state.order_depths["CROISSANTS"].sell_orders[croissants_order.price] == 0:
                         del state.order_depths["CROISSANTS"].sell_orders[croissants_order.price]
-
-                    try:
-                        logger.print(f"croissants ask vol {state.order_depths["CROISSANTS"].sell_orders[croissants_order.price]}")
-                    except:
-                        pass
 
                     state.order_depths["JAMS"].sell_orders[jams_order.price] += (3 * execute_volume)
                     if state.order_depths["JAMS"].sell_orders[jams_order.price] == 0:
                         del state.order_depths["JAMS"].sell_orders[jams_order.price]
 
-                    try:
-                        logger.print(
-                        f"jams ask vol {state.order_depths["JAMS"].sell_orders[jams_order.price]}")
-                    except:
-                        pass
-
                     state.order_depths["DJEMBES"].sell_orders[djembes_order.price] += execute_volume
                     if state.order_depths["DJEMBES"].sell_orders[djembes_order.price] == 0:
                         del state.order_depths["DJEMBES"].sell_orders[djembes_order.price]
-
-                    try:
-                        logger.print(
-                        f"djembes ask vol {state.order_depths["DJEMBES"].sell_orders[djembes_order.price]}")
-                    except:
-                        pass
 
                     sell_order_volume += execute_volume
 
@@ -714,14 +682,10 @@ class Trader:
                     best_ask = min(order_depth.sell_orders.keys())
                     best_ask_volume = -1 * order_depth.sell_orders[best_ask]
 
-                    logger.print(f"ask/vol {best_ask, best_ask_volume}")
-
                     synthetic_bid_volume = synthetic_order_depth.buy_orders[synthetic_bid]
 
                     orderbook_volume = min(best_ask_volume, synthetic_bid_volume)
                     execute_volume = min(orderbook_volume, target_quantity)
-
-                    logger.print(f"exec vol {execute_volume}")
 
                     if execute_volume == 0:
                         return orders, croissants_orders, jams_orders, djembes_orders
@@ -743,37 +707,17 @@ class Trader:
                     if order_depth.sell_orders[best_ask] == 0:
                         del order_depth.sell_orders[best_ask]
 
-                    try:
-                        logger.print(f"ask vol {order_depth.sell_orders[best_ask]}")
-                    except:
-                        pass
-
                     state.order_depths["CROISSANTS"].buy_orders[croissants_order.price] -= (6 * execute_volume)
                     if state.order_depths["CROISSANTS"].buy_orders[croissants_order.price] == 0:
                         del state.order_depths["CROISSANTS"].buy_orders[croissants_order.price]
-
-                    try:
-                        logger.print(f"croissants bid vol {state.order_depths["CROISSANTS"].buy_orders[croissants_order.price]}")
-                    except:
-                        pass
 
                     state.order_depths["JAMS"].buy_orders[jams_order.price] -= (3 * execute_volume)
                     if state.order_depths["JAMS"].buy_orders[jams_order.price] == 0:
                         del state.order_depths["JAMS"].buy_orders[jams_order.price]
 
-                    try:
-                        logger.print(f"jams bid vol {state.order_depths["JAMS"].buy_orders[jams_order.price]}")
-                    except:
-                        pass
-
                     state.order_depths["DJEMBES"].buy_orders[djembes_order.price] -= execute_volume
                     if state.order_depths["DJEMBES"].buy_orders[djembes_order.price] == 0:
                         del state.order_depths["DJEMBES"].buy_orders[djembes_order.price]
-
-                    try:
-                        logger.print(f"djembes bid vol {state.order_depths["DJEMBES"].buy_orders[djembes_order.price]}")
-                    except:
-                        pass
 
                     buy_order_volume += execute_volume
 
@@ -929,8 +873,6 @@ class Trader:
         order_depth = state.order_depths["PICNIC_BASKET2"]
         position = state.position["PICNIC_BASKET2"] if "PICNIC_BASKET2" in state.position else 0
 
-        logger.print(f"picnic2 position {position}")
-
         # fair value calculation: it seems that the fair is the mid-price of the highest ask and lowest bid
         mm_ask = max(order_depth.sell_orders.keys())
         mm_bid = min(order_depth.buy_orders.keys())
@@ -949,14 +891,12 @@ class Trader:
         buy_order_volume = 0
         sell_order_volume = 0
 
-        # z score for spread based on rolling window
+        # z score for spread based on rolling window 10/30 220402
         z_trade = True
-        window = 20
-        z_score_threshold = 40
+        window = 10
+        z_score_threshold = 30
 
         spread = picnic_fair_value - synthetic_fair_value
-
-        logger.print(f"spread {spread}")
 
         if first:
             stored_data["PICNIC_BASKET2"]["spread_history"].append(spread)
@@ -974,8 +914,6 @@ class Trader:
             else:
                 z_score = (spread - 30.237) / spread_std
 
-            logger.print(f"z {z_score}")
-
             # if we are much higher, then picnic is overvalued and we should sell picnic, buy synthetic
             if z_score > z_score_threshold:
                 if position > -1 * limit:
@@ -985,12 +923,8 @@ class Trader:
 
                     synthetic_ask_volume = -1 * synthetic_order_depth.sell_orders[synthetic_ask]
 
-                    logger.print(f"bid/vol {best_bid, best_bid_volume}")
-
                     orderbook_volume = min(best_bid_volume, synthetic_ask_volume)
                     execute_volume = min(orderbook_volume, target_quantity)
-
-                    logger.print(f"exec vol {execute_volume}")
 
                     if execute_volume == 0:
                         return orders, croissants_orders, jams_orders
@@ -1009,29 +943,13 @@ class Trader:
                     if order_depth.buy_orders[best_bid] == 0:
                         del order_depth.buy_orders[best_bid]
 
-                    try:
-                        logger.print(f"bid vol {order_depth.buy_orders[best_bid]}")
-                    except:
-                        pass
-
                     state.order_depths["CROISSANTS"].sell_orders[croissants_order.price] += (4 * execute_volume)
                     if state.order_depths["CROISSANTS"].sell_orders[croissants_order.price] == 0:
                         del state.order_depths["CROISSANTS"].sell_orders[croissants_order.price]
 
-                    try:
-                        logger.print(
-                        f"croissants ask vol {state.order_depths["CROISSANTS"].sell_orders[croissants_order.price]}")
-                    except:
-                        pass
-
                     state.order_depths["JAMS"].sell_orders[jams_order.price] += (2 * execute_volume)
                     if state.order_depths["JAMS"].sell_orders[jams_order.price] == 0:
                         del state.order_depths["JAMS"].sell_orders[jams_order.price]
-
-                    try:
-                        logger.print(f"jams ask vol {state.order_depths["JAMS"].sell_orders[jams_order.price]}")
-                    except:
-                        pass
 
                     sell_order_volume += execute_volume
 
@@ -1042,14 +960,10 @@ class Trader:
                     best_ask = min(order_depth.sell_orders.keys())
                     best_ask_volume = -1 * order_depth.sell_orders[best_ask]
 
-                    logger.print(f"ask/vol {best_ask, best_ask_volume}")
-
                     synthetic_bid_volume = synthetic_order_depth.buy_orders[synthetic_bid]
 
                     orderbook_volume = min(best_ask_volume, synthetic_bid_volume)
                     execute_volume = min(orderbook_volume, target_quantity)
-
-                    logger.print(f"exec vol {execute_volume}")
 
                     if execute_volume == 0:
                         return orders, croissants_orders, jams_orders
@@ -1070,30 +984,13 @@ class Trader:
                     if order_depth.sell_orders[best_ask] == 0:
                         del order_depth.sell_orders[best_ask]
 
-                    try:
-                        logger.print(f"ask vol {order_depth.sell_orders[best_ask]}")
-                    except:
-                        pass
-
                     state.order_depths["CROISSANTS"].buy_orders[croissants_order.price] -= (4 * execute_volume)
                     if state.order_depths["CROISSANTS"].buy_orders[croissants_order.price] == 0:
                         del state.order_depths["CROISSANTS"].buy_orders[croissants_order.price]
 
-                    try:
-                        logger.print(
-                        f"croissants bid vol {state.order_depths["CROISSANTS"].buy_orders[croissants_order.price]}")
-                    except:
-                        pass
-
                     state.order_depths["JAMS"].buy_orders[jams_order.price] -= (2 * execute_volume)
                     if state.order_depths["JAMS"].buy_orders[jams_order.price] == 0:
                         del state.order_depths["JAMS"].buy_orders[jams_order.price]
-
-                    try:
-                        logger.print(
-                        f"jams bid vol {state.order_depths["JAMS"].buy_orders[jams_order.price]}")
-                    except:
-                        pass
 
                     buy_order_volume += execute_volume
 
@@ -1253,8 +1150,6 @@ class Trader:
         order_depth = state.order_depths["DJEMBES"]
         position = state.position["DJEMBES"] if "DJEMBES" in state.position else 0
 
-        logger.print(f"djembes position {position}")
-
         # fair value calculation: it seems that the fair is the mid-price of the highest ask and lowest bid
         mm_ask = max(order_depth.sell_orders.keys())
         mm_bid = min(order_depth.buy_orders.keys())
@@ -1274,14 +1169,12 @@ class Trader:
         buy_order_volume = 0
         sell_order_volume = 0
 
-        # z score for spread based on rolling window
+        # z score for spread based on rolling window  30/10 220402
         z_trade = True
         window = 30
         z_score_threshold = 10
 
         spread = djembes_fair_value - synthetic_fair_value
-
-        logger.print(f"spread {spread}")
 
         if first:
             stored_data["DJEMBES"]["spread_history"].append(spread)
@@ -1299,8 +1192,6 @@ class Trader:
             else:
                 z_score = (spread + 3.389) / spread_std
 
-            logger.print(f"z {z_score}")
-
             # if we are much higher, then djembes is overvalued and we should sell djembes, buy synthetic
             if z_score > z_score_threshold:
                 if position > -1 * limit:
@@ -1308,14 +1199,10 @@ class Trader:
                     best_bid = max(order_depth.buy_orders.keys())
                     best_bid_volume = order_depth.buy_orders[best_bid]
 
-                    logger.print(f"bid/vol {best_bid, best_bid_volume}")
-
                     synthetic_ask_volume = -1 * synthetic_order_depth.sell_orders[synthetic_ask]
 
                     orderbook_volume = min(best_bid_volume, synthetic_ask_volume)
                     execute_volume = min(orderbook_volume, target_quantity)
-
-                    logger.print(f"exec vol {execute_volume}")
 
                     if execute_volume == 0:
                         return orders, picnic1_orders, picnic2_orders
@@ -1334,30 +1221,13 @@ class Trader:
                     if order_depth.buy_orders[best_bid] == 0:
                         del order_depth.buy_orders[best_bid]
 
-                    try:
-                        logger.print(f"bid vol {order_depth.buy_orders[best_bid]}")
-                    except:
-                        pass
-
                     state.order_depths["PICNIC_BASKET1"].sell_orders[picnic1_order.price] += execute_volume
                     if state.order_depths["PICNIC_BASKET1"].sell_orders[picnic1_order.price] == 0:
                         del state.order_depths["PICNIC_BASKET1"].sell_orders[picnic1_order.price]
 
-                    try:
-                        logger.print(
-                        f"picnic1 ask vol {state.order_depths["PICNIC_BASKET1"].sell_orders[picnic1_order.price]}")
-                    except:
-                        pass
-
                     state.order_depths["PICNIC_BASKET2"].buy_orders[picnic2_order.price] -= int(execute_volume * (3 / 2))
                     if state.order_depths["PICNIC_BASKET2"].buy_orders[picnic2_order.price] == 0:
                         del state.order_depths["PICNIC_BASKET2"].buy_orders[picnic2_order.price]
-
-                    try:
-                        logger.print(
-                        f"picnic2 bid vol {state.order_depths["PICNIC_BASKET2"].buy_orders[picnic2_order.price]}")
-                    except:
-                        pass
 
                     sell_order_volume += execute_volume
 
@@ -1368,14 +1238,10 @@ class Trader:
                     best_ask = min(order_depth.sell_orders.keys())
                     best_ask_volume = -1 * order_depth.sell_orders[best_ask]
 
-                    logger.print(f"ask/vol {best_ask, best_ask_volume}")
-
                     synthetic_bid_volume = synthetic_order_depth.buy_orders[synthetic_bid]
 
                     orderbook_volume = min(best_ask_volume, synthetic_bid_volume)
                     execute_volume = min(orderbook_volume, target_quantity)
-
-                    logger.print(f"exec vol {execute_volume}")
 
                     if execute_volume == 0:
                         return orders, picnic1_orders, picnic2_orders
@@ -1396,30 +1262,13 @@ class Trader:
                     if order_depth.sell_orders[best_ask] == 0:
                         del order_depth.sell_orders[best_ask]
 
-                    try:
-                        logger.print(f"ask vol {order_depth.sell_orders[best_ask]}")
-                    except:
-                        pass
-
                     state.order_depths["PICNIC_BASKET1"].buy_orders[picnic1_order.price] -= execute_volume
                     if state.order_depths["PICNIC_BASKET1"].buy_orders[picnic1_order.price] == 0:
                         del state.order_depths["PICNIC_BASKET1"].buy_orders[picnic1_order.price]
 
-                    try:
-                        logger.print(
-                        f"picnic1 bid vol {state.order_depths["PICNIC_BASKET1"].buy_orders[picnic1_order.price]}")
-                    except:
-                        pass
-
                     state.order_depths["PICNIC_BASKET2"].sell_orders[picnic2_order.price] += int(execute_volume * (3 / 2))
                     if state.order_depths["PICNIC_BASKET2"].sell_orders[picnic2_order.price] == 0:
                         del state.order_depths["PICNIC_BASKET2"].sell_orders[picnic2_order.price]
-
-                    try:
-                        logger.print(
-                        f"picnic2 ask vol {state.order_depths["PICNIC_BASKET2"].sell_orders[picnic2_order.price]}")
-                    except:
-                        pass
 
                     buy_order_volume += execute_volume
 
