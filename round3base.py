@@ -1584,7 +1584,7 @@ class Trader:
         if iv < 0.1:
             return orders
 
-        window = 50
+        window = 100
         stored_data["VOLCANIC_ROCK_VOUCHER_10000"]["spread_history"].append(iv)
         if len(stored_data["VOLCANIC_ROCK_VOUCHER_10000"]["spread_history"]) < 5:
             return orders
@@ -1597,7 +1597,7 @@ class Trader:
             return orders
 
         z_score = (iv - iv_mean) / iv_std
-        z_threshold = 1
+        z_threshold = 0.1 # 100 0.25  345638
 
         logger.print(z_score)
 
@@ -1655,7 +1655,7 @@ class Trader:
 
         iv = self.find_vol(fair_value, rock_fair_value, 10250, T, 0)
 
-        window = 50
+        window = 200
         stored_data["VOLCANIC_ROCK_VOUCHER_10250"]["spread_history"].append(iv)
         if len(stored_data["VOLCANIC_ROCK_VOUCHER_10250"]["spread_history"]) < 5:
             return orders
@@ -1668,9 +1668,7 @@ class Trader:
             return orders
 
         z_score = (iv - iv_mean) / iv_std
-        z_threshold = 1
-
-        logger.print(z_score)
+        z_threshold = 2
 
         # selling options, meaning iv is way too much larger than hv
         if z_score > z_threshold:
@@ -1726,7 +1724,7 @@ class Trader:
 
         iv = self.find_vol(fair_value, rock_fair_value, 10500, T, 0)
 
-        window = 200
+        window = 300
         stored_data["VOLCANIC_ROCK_VOUCHER_10500"]["spread_history"].append(iv)
         if len(stored_data["VOLCANIC_ROCK_VOUCHER_10500"]["spread_history"]) < 5:
             return orders
@@ -1739,9 +1737,7 @@ class Trader:
             return orders
 
         z_score = (iv - iv_mean) / iv_std
-        z_threshold = 2.5
-
-        logger.print(iv_mean, iv_std, z_score)
+        z_threshold = 1.75 # 300 1.75
 
         # selling options, meaning iv is way too much larger than hv
         if z_score > z_threshold:
@@ -1883,24 +1879,24 @@ class Trader:
             #                                                                    "VOLCANIC_ROCK_VOUCHER_9750"],
             #                                                                stored_data,
             #                                                                )
-            # if product == "VOLCANIC_ROCK_VOUCHER_10000":
-            #     result["VOLCANIC_ROCK_VOUCHER_10000"] = self.v10000_strategy(state,
-            #                                                                POSITION_LIMITS[
-            #                                                                    "VOLCANIC_ROCK_VOUCHER_10000"],
-            #                                                                stored_data,
-            #                                                                )
+            if product == "VOLCANIC_ROCK_VOUCHER_10000":
+                result["VOLCANIC_ROCK_VOUCHER_10000"] = self.v10000_strategy(state,
+                                                                           POSITION_LIMITS[
+                                                                               "VOLCANIC_ROCK_VOUCHER_10000"],
+                                                                           stored_data,
+                                                                           )
             # if product == "VOLCANIC_ROCK_VOUCHER_10250":
             #     result["VOLCANIC_ROCK_VOUCHER_10250"] = self.v10250_strategy(state,
             #                                                                POSITION_LIMITS[
             #                                                                    "VOLCANIC_ROCK_VOUCHER_10250"],
             #                                                                stored_data,
             #                                                                )
-            if product == "VOLCANIC_ROCK_VOUCHER_10500":
-                result["VOLCANIC_ROCK_VOUCHER_10500"] = self.v10500_strategy(state,
-                                                                           POSITION_LIMITS[
-                                                                               "VOLCANIC_ROCK_VOUCHER_10500"],
-                                                                           stored_data,
-                                                                           )
+            # if product == "VOLCANIC_ROCK_VOUCHER_10500":
+            #     result["VOLCANIC_ROCK_VOUCHER_10500"] = self.v10500_strategy(state,
+            #                                                                POSITION_LIMITS[
+            #                                                                    "VOLCANIC_ROCK_VOUCHER_10500"],
+            #                                                                stored_data,
+            #                                                                )
 
         trader_data = json.dumps(stored_data, separators=(",", ":"))
 
