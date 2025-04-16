@@ -20,3 +20,18 @@ __pycache__/tutorialfinal.cpython-312.pyc
 .gitignore
 control.csv
 submissions/2025-04-10_00-10-57.log
+ROUND 3/round-3-island-data-bottle/prices_round_3_day_0.csv
+ROUND 3/round-3-island-data-bottle/prices_round_3_day_1.csv
+ROUND 3/round-3-island-data-bottle/prices_round_3_day_2.csv
+ROUND 3/round-3-island-data-bottle/trades_round_3_day_0.csv
+ROUND 3/round-3-island-data-bottle/trades_round_3_day_1.csv
+ROUND 3/round-3-island-data-bottle/trades_round_3_day_2.csv
+ROUND 2/__pycache__/round2.cpython-312.pyc
+ROUND 2/__pycache__/round2v2.cpython-312.pyc
+ROUND 1/__pycache__/datamodel.cpython-312.pyc
+ROUND 1/__pycache__/Round1.cpython-312.pyc
+ROUND 2/__pycache__/datamodel.cpython-312.pyc
+ROUND 3/__pycache__/datamodel.cpython-312.pyc
+.gitignore
+ROUND 3/round3v1.py
+.gitignore
