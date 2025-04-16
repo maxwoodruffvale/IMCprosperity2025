@@ -1438,7 +1438,7 @@ class Trader:
         if iv < 0.15:
             return orders
 
-        window = 50
+        window = 100
         stored_data["VOLCANIC_ROCK_VOUCHER_9500"]["spread_history"].append(iv)
         if len(stored_data["VOLCANIC_ROCK_VOUCHER_9500"]["spread_history"]) < 5:
             return orders
@@ -1451,9 +1451,7 @@ class Trader:
             return orders
 
         z_score = (iv - iv_mean) / iv_std
-        z_threshold = 1
-
-        logger.print(z_score)
+        z_threshold = 1.4 # 154655 1.5 50
 
         # selling options, meaning iv is way too much larger than hv
         if z_score > z_threshold:
@@ -1511,7 +1509,7 @@ class Trader:
         if iv < 0.125:
             return orders
 
-        window = 50
+        window = 100
         stored_data["VOLCANIC_ROCK_VOUCHER_9750"]["spread_history"].append(iv)
         if len(stored_data["VOLCANIC_ROCK_VOUCHER_9750"]["spread_history"]) < 5:
             return orders
@@ -1524,7 +1522,7 @@ class Trader:
             return orders
 
         z_score = (iv - iv_mean) / iv_std
-        z_threshold = 1
+        z_threshold = 0.6
 
         logger.print(z_score)
 
@@ -1597,7 +1595,7 @@ class Trader:
             return orders
 
         z_score = (iv - iv_mean) / iv_std
-        z_threshold = 0.1 # 100 0.25  345638
+        z_threshold = 0.25
 
         logger.print(z_score)
 
@@ -1760,6 +1758,64 @@ class Trader:
 
         return orders
 
+    def rock_strategy(
+            self,
+            state: TradingState,
+            limit,
+            stored_data,
+    ):
+        orders = []
+
+        order_depth = state.order_depths["VOLCANIC_ROCK"]
+
+        position = state.position[
+            "VOLCANIC_ROCK"] if "VOLCANIC_ROCK" in state.position else 0
+
+        # get fairs
+        try:
+            worst_ask = max(order_depth.sell_orders.keys())
+            worst_bid = min(order_depth.buy_orders.keys())
+            fair_value = (worst_ask + worst_bid) / 2
+
+        except:
+            return orders
+
+        window = 100
+        stored_data["VOLCANIC_ROCK"]["spread_history"].append(fair_value)
+        if len(stored_data["VOLCANIC_ROCK"]["spread_history"]) < 5:
+            return orders
+        elif len(stored_data["VOLCANIC_ROCK"]["spread_history"]) > window:
+            stored_data["VOLCANIC_ROCK"]["spread_history"].pop(0)
+
+        rock_mean = np.mean(stored_data["VOLCANIC_ROCK"]["spread_history"])
+        rock_std = np.std(stored_data["VOLCANIC_ROCK"]["spread_history"])
+        if rock_std == 0:
+            return orders
+
+        z_score = (fair_value - rock_mean) / rock_std
+        z_threshold = 1.75 # 300 1.75
+
+        # selling options, meaning iv is way too much larger than hv
+        if z_score > z_threshold:
+            best_bid = max(order_depth.buy_orders.keys())
+            possible_volume = order_depth.buy_orders[best_bid]
+            max_sell = limit + position
+            volume = min(possible_volume, max_sell)
+            if volume > 0:
+                orders.append(Order("VOLCANIC_ROCK", best_bid, -volume))
+
+        # buying options
+        elif z_score < -z_threshold:
+            best_ask = min(order_depth.sell_orders.keys())
+            possible_volume = -order_depth.sell_orders[best_ask]
+            # If position_option is negative, we have space to buy up to (limit_option - position_option).
+            max_buy = limit - position
+            volume = min(possible_volume, max_buy)
+            if volume > 0:
+                orders.append(Order("VOLCANIC_ROCK", best_ask, volume))
+
+        return orders
+
     def run(self, state: TradingState):
         stored_data = json.loads(state.traderData) if state.traderData else {}
 
@@ -1867,6 +1923,11 @@ class Trader:
             #                 arb3_exists = False
             #         else:
             #             break
+            if product == "VOLCANIC_ROCK":
+                result["VOLCANIC_ROCK"] = self.rock_strategy(state,
+                                                             POSITION_LIMITS["VOLCANIC_ROCK"],
+                                                             stored_data,
+                                                             )
             # if product == "VOLCANIC_ROCK_VOUCHER_9500":
             #     result["VOLCANIC_ROCK_VOUCHER_9500"] = self.v9500_strategy(state,
             #                                                                POSITION_LIMITS[
@@ -1879,12 +1940,12 @@ class Trader:
             #                                                                    "VOLCANIC_ROCK_VOUCHER_9750"],
             #                                                                stored_data,
             #                                                                )
-            if product == "VOLCANIC_ROCK_VOUCHER_10000":
-                result["VOLCANIC_ROCK_VOUCHER_10000"] = self.v10000_strategy(state,
-                                                                           POSITION_LIMITS[
-                                                                               "VOLCANIC_ROCK_VOUCHER_10000"],
-                                                                           stored_data,
-                                                                           )
+            # if product == "VOLCANIC_ROCK_VOUCHER_10000":
+            #     result["VOLCANIC_ROCK_VOUCHER_10000"] = self.v10000_strategy(state,
+            #                                                                POSITION_LIMITS[
+            #                                                                    "VOLCANIC_ROCK_VOUCHER_10000"],
+            #                                                                stored_data,
+            #                                                                )
             # if product == "VOLCANIC_ROCK_VOUCHER_10250":
             #     result["VOLCANIC_ROCK_VOUCHER_10250"] = self.v10250_strategy(state,
             #                                                                POSITION_LIMITS[
