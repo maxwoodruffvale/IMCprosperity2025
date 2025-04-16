@@ -1438,7 +1438,7 @@ class Trader:
         if iv < 0.15:
             return orders
 
-        window = 50
+        window = 100
         stored_data["VOLCANIC_ROCK_VOUCHER_9500"]["spread_history"].append(iv)
         if len(stored_data["VOLCANIC_ROCK_VOUCHER_9500"]["spread_history"]) < 5:
             return orders
@@ -1451,7 +1451,7 @@ class Trader:
             return orders
 
         z_score = (iv - iv_mean) / iv_std
-        z_threshold = 1.5
+        z_threshold = 1.4
 
         # selling options, meaning iv is way too much larger than hv
         if z_score > z_threshold:
@@ -1509,7 +1509,7 @@ class Trader:
         if iv < 0.125:
             return orders
 
-        window = 50
+        window = 100
         stored_data["VOLCANIC_ROCK_VOUCHER_9750"]["spread_history"].append(iv)
         if len(stored_data["VOLCANIC_ROCK_VOUCHER_9750"]["spread_history"]) < 5:
             return orders
@@ -1522,7 +1522,7 @@ class Trader:
             return orders
 
         z_score = (iv - iv_mean) / iv_std
-        z_threshold = 0.7
+        z_threshold = 0.6
 
         logger.print(z_score)
 
