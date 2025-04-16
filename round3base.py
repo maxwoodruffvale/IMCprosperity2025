@@ -1793,7 +1793,7 @@ class Trader:
             return orders
 
         z_score = (fair_value - rock_mean) / rock_std
-        z_threshold = 1.75 # 300 1.75
+        z_threshold = 2.3
 
         # selling options, meaning iv is way too much larger than hv
         if z_score > z_threshold:
