@@ -35,3 +35,5 @@ ROUND 3/__pycache__/datamodel.cpython-312.pyc
 .gitignore
 ROUND 3/round3v1.py
 .gitignore
+ROUND 3/__pycache__/
+ROUND 3/__pycache__/round3v1.cpython-312.pyc
